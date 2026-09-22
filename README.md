@@ -3,19 +3,39 @@
 A private, offline expense tracker that installs on an iPhone from Safari. No account, no server, no cost.
 All data stays on the device (browser storage).
 
-## Put it on your iPhone (free)
+## Your setup
+
+- **Live app:** https://b33mer21.github.io/pennywise/ — already deployed and up to date (confirmed live,
+  new icon and black/white theme included).
+- **Repo:** https://github.com/b33mer21/pennywise — GitHub Pages is already on, so nothing to configure there.
+
+**On your iPhone:** open the live app link above in **Safari** → **Share** → **Add to Home Screen**.
+It then opens full-screen like a native app and works offline. Everything below this point (the SMS
+sync backend, the two Shortcuts, and the widget) is what's left to set up on the phone.
+
+### Checklist, in order
+
+1. Add to Home Screen (above) — 1 minute.
+2. [Deploy the free backend](#1-deploy-the-free-backend-one-time-5-minutes) — a Google Sheet + Apps Script, ~5 minutes.
+3. Paste the resulting URL + secret into Pennywise → Settings → **Automatic sync**.
+4. [Set each account's Sync tag](#2-set-each-accounts-sync-tag) (`combank` / `ntb`).
+5. [Build the COMBANK Shortcut](#3-build-the-combank-shortcut-one-time).
+6. [Build the NTB Shortcut](#4-build-the-ntb-shortcut).
+7. [Set up the home-screen widget](#home-screen-widget-balance--monthly-spend) (optional).
+
+<details>
+<summary>Deploying from scratch (for reference — not needed, yours is already live)</summary>
 
 The app must be served over HTTPS to be installable. GitHub Pages does this for free.
 
-1. Create a free account at github.com and make a **new public repository** (e.g. `pennywise`).
+1. Create a free account at github.com and make a **new public repository**.
 2. Click **Add file → Upload files**, drag in everything from this folder
    (`index.html`, `styles.css`, `app.js`, `sw.js`, `manifest.webmanifest`, and the `icons` folder), then **Commit**.
 3. Go to **Settings → Pages**, set **Source: Deploy from a branch**, branch **main**, folder **/ (root)**, and Save.
-4. After a minute your app is live at `https://<your-username>.github.io/pennywise/`.
-5. On the iPhone, open that link in **Safari**, tap **Share → Add to Home Screen**.
-   It now opens full-screen like a native app and works offline.
+4. After a minute your app is live at `https://<your-username>.github.io/<repo-name>/`.
 
 Netlify Drop (app.netlify.com/drop) also works: drag the folder in and claim the site with a free account.
+</details>
 
 ## Features
 
@@ -214,7 +234,7 @@ text result on your home screen, at no extra cost and no extra app.
 
 - **Back up regularly** (Settings → Back up). Clearing Safari website data or deleting the app removes everything.
 - Data is per device. To move to a new phone: back up, then restore.
-- After changing any file, bump `CACHE` in `sw.js` (e.g. `pennywise-v3`) so devices pick up the update.
+- After changing any file, bump `CACHE` in `sw.js` (e.g. `pennywise-v5`) so devices pick up the update.
 
 ## Run locally
 
