@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pennywise</title>
+  <meta name="description" content="A private, offline expense tracker.">
+  <meta name="theme-color" content="#f5f6f4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0f1211" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Pennywise">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="month-nav" id="monthNav">
+          <button type="button" class="icon-btn" id="prevMonth" aria-label="Previous month">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+          </button>
+          <button type="button" class="month-label" id="monthLabel" title="Jump to this month"></button>
+          <button type="button" class="icon-btn" id="nextMonth" aria-label="Next month">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+          </button>
+        </div>
+        <h1 class="page-title" id="pageTitle" hidden>Settings</h1>
+      </div>
+    </header>
+
+    <main>
+      <section id="view-list" class="view" aria-label="Expenses">
+        <div id="summary"></div>
+        <div class="search">
+          <input id="search" type="search" placeholder="Search notes, categories, amounts" aria-label="Search expenses" autocomplete="off">
+        </div>
+        <div id="entries"></div>
+      </section>
+
+      <section id="view-stats" class="view" aria-label="Statistics" hidden></section>
+      <section id="view-settings" class="view" aria-label="Settings" hidden></section>
+    </main>
+
+    <button type="button" class="fab" id="fab" aria-label="Add expense">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+
+    <nav class="tabbar" aria-label="Main">
+      <div class="tabbar-inner">
+        <button type="button" class="tab" data-tab="list">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+          <span>Expenses</span>
+        </button>
+        <button type="button" class="tab" data-tab="stats">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20v-8M12 20V5M19 20V9"/></svg>
+          <span>Stats</span>
+        </button>
+        <button type="button" class="tab" data-tab="settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>
+          <span>Settings</span>
+        </button>
+      </div>
+    </nav>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden>
+      <span id="toastText"></span>
+      <button type="button" id="toastAction" hidden></button>
+    </div>
+  </div>
+
+  <dialog id="sheet" aria-labelledby="sheetTitle">
+    <form id="expenseForm" novalidate>
+      <div class="sheet-head">
+        <h2 id="sheetTitle">New expense</h2>
+        <button type="button" class="icon-btn" id="sheetClose" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+
+      <label class="amount-field">
+        <span class="cur" id="curSymbol">$</span>
+        <input id="amount" inputmode="decimal" autocomplete="off" placeholder="0.00" aria-label="Amount">
+      </label>
+
+      <div class="field-label" id="catLabel">Category</div>
+      <div class="chips" id="chips" role="radiogroup" aria-labelledby="catLabel"></div>
+
+      <label class="field">
+        <span>Date</span>
+        <input type="date" id="date" required>
+      </label>
+      <label class="field">
+        <span>Note</span>
+        <input id="note" maxlength="200" placeholder="Optional" autocomplete="off">
+      </label>
+
+      <p class="form-error" id="formError" role="alert" hidden></p>
+
+      <div class="sheet-actions">
+        <button type="button" class="btn danger" id="deleteBtn" hidden>Delete</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <noscript>Pennywise needs JavaScript to run.</noscript>
+  <script src="app.js"></script>
+</body>
+</html>
