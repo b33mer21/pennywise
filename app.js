@@ -512,7 +512,7 @@
       <h2 class="section-title">Accounts</h2>
       <div class="card group">
         <ul class="cat-list">${state.accounts.map((a) => `<li>
-          <span class="badge" style="background:${tint('#0B7A5A')}">${a.id === state.activeAccountId ? '★' : '🏦'}</span>
+          <span class="badge" style="background:${tint('#14161A')}">${a.id === state.activeAccountId ? '★' : '🏦'}</span>
           <span class="name">${esc(a.name)} <span style="color:var(--muted);font-weight:400">(${esc(a.currency)}${a.remoteTag ? ' · ' + esc(a.remoteTag) : ''})</span></span>
           <button type="button" class="link-btn" data-edit-account="${esc(a.id)}" style="color:var(--accent)">Edit</button></li>`).join('')}
         </ul>
