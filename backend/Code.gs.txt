@@ -1,0 +1,247 @@
+/**
+ * Pennywise sync backend — v2 (multi-account + live FX conversion).
+ *
+ * This is NOT a file you run locally — it's Google Apps Script code you paste into
+ * a script bound to a Google Sheet. Google hosts and runs it for free, and it acts as
+ * the always-on receiver that iOS Shortcuts post to, and that Pennywise reads from.
+ *
+ * ─── One-time setup ───────────────────────────────────────────────────────────
+ *  1. Go to sheets.google.com → Blank spreadsheet. Name it e.g. "Pennywise transactions".
+ *  2. Extensions → Apps Script. Delete the sample "myFunction() {}" code.
+ *  3. Paste this entire file in its place.
+ *  4. Replace SECRET below with a long random string only you know
+ *     (e.g. mash the keyboard for 20+ characters — this is what keeps your sheet
+ *     private, since anyone who knows the URL AND the secret can read/write it).
+ *  5. Save (Ctrl+S / Cmd+S).
+ *  6. Click Deploy → New deployment → gear icon → Web app.
+ *       Description:      Pennywise sync (optional)
+ *       Execute as:        Me
+ *       Who has access:    Anyone
+ *     Click Deploy. The first time, Google will ask you to authorize the script —
+ *     click Review permissions, choose your account, click Advanced →
+ *     "Go to <project name> (unsafe)" → Allow. ("Unsafe" here just means Google
+ *     can't vouch for code it didn't write itself; it's your own script.)
+ *  7. Copy the Web app URL shown (ends in /exec). That, plus your SECRET, are the
+ *     two values you paste into:
+ *       - Pennywise → Settings → Automatic sync
+ *       - Each iOS Shortcut (see README.md)
+ *
+ * If you ever edit this script again, you must create a NEW deployment version
+ * (Deploy → Manage deployments → edit (pencil) → Version: New version → Deploy)
+ * for the changes to take effect — saving alone does not update the live URL.
+ *
+ * ─── What it stores ────────────────────────────────────────────────────────────
+ * Every transaction is appended as a row in the sheet, so the sheet itself doubles
+ * as a human-readable backup you can open any time:
+ *   id | receivedAt | account | type | amount | currency | convertedAmount | fxRate | merchant | date | raw | balance
+ *
+ * `balance` is optional (e.g. NTB's SMS states the account's exact balance after every
+ * transaction) — it's logged for your own eyeballing in the sheet only; Pennywise itself
+ * still computes each account's balance from its starting balance + synced transactions,
+ * so the two are a useful cross-check against each other rather than the same number.
+ *
+ * `account` is a free-text tag (e.g. "combank", "ntb") that must match a Pennywise
+ * account's Sync tag (set when you add/edit an account in Settings) so incoming rows
+ * land in the right ledger. `type` is "debit", "credit", or "cancelled" (logged for
+ * your own reference, never auto-added as a transaction — see the README).
+ *
+ * ─── Currency conversion ───────────────────────────────────────────────────────
+ * When a transaction's currency isn't LKR, this script fetches COMBANK's *current*
+ * published exchange rate (https://www.combank.lk/rates-tariff) and converts at
+ * that moment — COMBANK's page only ever shows today's rate, not historical rates
+ * by date, so this is always an approximation of what the transaction actually
+ * cost, not the exact rate on the transaction's own date. If a currency isn't on
+ * that page (e.g. MYR), the row is stored unconverted and Pennywise flags it.
+ */
+
+const SECRET = 'CHANGE-THIS-TO-A-LONG-RANDOM-SECRET';
+const BASE_CURRENCY = 'LKR'; // COMBANK's table is LKR-per-foreign-unit; change if you bank elsewhere.
+
+// Currency code → the exact label text used in COMBANK's exchange rate table.
+const COMBANK_LABELS = {
+  USD: 'US DOLLARS', EUR: 'EURO', GBP: 'STERLING POUNDS', JPY: 'JAPANESE YEN',
+  SGD: 'SINGAPORE DOLLARS', AUD: 'AUSTRALIAN DOLLARS', CHF: 'SWISS FRANCS',
+  KWD: 'KUWAITI DINARS', OMR: 'OMANI RIYALS', SAR: 'SAUDI ARABIAN RIYALS',
+  AED: 'UAE DIRHAMS', QAR: 'QATAR RIYALS', JOD: 'JORDANIAN DINARS',
+  BHD: 'BAHRAIN DINARS', INR: 'INDIAN RUPEES', CAD: 'CANADIAN DOLLAR',
+  NZD: 'NEW ZEALAND DOLLARS',
+};
+
+// ---------- Entry points ----------
+
+function doPost(e) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const body = JSON.parse(e.postData.contents);
+    if (body.secret !== SECRET) return json_({ ok: false, error: 'bad secret' });
+
+    const amount = Number(body.amount);
+    if (!isFinite(amount) || amount <= 0) return json_({ ok: false, error: 'bad amount' });
+
+    const type = (body.type === 'credit' || body.type === 'cancelled') ? body.type : 'debit';
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(body.date || '') ? body.date : todayISO_();
+    const currency = (body.currency || BASE_CURRENCY).toUpperCase();
+
+    let convertedAmount = '';
+    let fxRate = '';
+    if (type !== 'cancelled') {
+      if (currency === BASE_CURRENCY) {
+        convertedAmount = amount;
+        fxRate = 1;
+      } else {
+        const rate = fetchCombankRate_(currency);
+        if (rate) { convertedAmount = Math.round(amount * rate * 100) / 100; fxRate = rate; }
+        // else left blank — Pennywise will flag the row as unconverted
+      }
+    }
+
+    const sheet = mainSheet_();
+    const id = sheet.getLastRow(); // header occupies row 1, so this is a simple increasing counter
+    sheet.appendRow([id, new Date(), body.account || '', type, amount, currency, convertedAmount, fxRate, body.merchant || '', date, body.raw || '', body.balance || '']);
+
+    return json_({ ok: true, id: id });
+  } catch (err) {
+    return json_({ ok: false, error: String(err) });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function doGet(e) {
+  const params = e.parameter || {};
+  let obj;
+
+  if (params.secret !== SECRET) {
+    obj = { ok: false, error: 'bad secret' };
+  } else if (params.action === 'rate') {
+    const rate = fetchCombankRate_((params.from || '').toUpperCase());
+    obj = rate ? { ok: true, rate: rate } : { ok: false, error: `${params.from} isn't on COMBANK's rate page` };
+  } else if (params.action === 'summary') {
+    obj = buildSummary_(params);
+  } else {
+    obj = listSince_(Number(params.since) || 0);
+  }
+
+  // Pennywise falls back to a JSONP (script tag) request if a plain fetch is ever
+  // blocked by the browser, so a ?callback=name param must be echoed back as JS, not JSON.
+  if (params.callback && /^[\w$]+$/.test(params.callback)) {
+    return ContentService.createTextOutput(`${params.callback}(${JSON.stringify(obj)})`).setMimeType(ContentService.MimeType.JAVASCRIPT);
+  }
+  return json_(obj);
+}
+
+// ---------- Sheet helpers ----------
+
+function mainSheet_() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(['id', 'receivedAt', 'account', 'type', 'amount', 'currency', 'convertedAmount', 'fxRate', 'merchant', 'date', 'raw', 'balance']);
+  }
+  return sheet;
+}
+
+function listSince_(since) {
+  const sheet = mainSheet_();
+  const last = sheet.getLastRow();
+  if (last < 2) return { ok: true, rows: [] };
+  const values = sheet.getRange(2, 1, last - 1, 12).getValues();
+  const rows = values
+    .filter((r) => Number(r[0]) > since)
+    .map((r) => ({
+      id: r[0], receivedAt: r[1], account: r[2], type: r[3], amount: r[4],
+      currency: r[5], convertedAmount: r[6] === '' ? null : r[6], fxRate: r[7] === '' ? null : r[7],
+      merchant: r[8], date: dateStr_(r[9]), raw: r[10], balance: r[11] === '' ? null : r[11],
+    }));
+  return { ok: true, rows: rows };
+}
+
+/** ?action=summary&account=combank&startingBalance=120000.00&startingDate=2026-09-01
+ * Returns spend-this-month and a running balance for one account, for a Shortcuts widget.
+ * startingBalance/startingDate are supplied by the widget Shortcut itself (Apps Script has
+ * no other record of them) — see the README's widget section. */
+function buildSummary_(params) {
+  const account = params.account || '';
+  const startingBalance = Number(params.startingBalance) || 0;
+  const startingDate = /^\d{4}-\d{2}-\d{2}$/.test(params.startingDate || '') ? params.startingDate : '1970-01-01';
+
+  const sheet = mainSheet_();
+  const last = sheet.getLastRow();
+  if (last < 2) return { ok: true, text: `${account}\nBalance: ${startingBalance.toFixed(2)}\nSpent this month: 0.00` };
+
+  const values = sheet.getRange(2, 1, last - 1, 12).getValues();
+  const monthPrefix = todayISO_().slice(0, 7);
+  let balance = startingBalance;
+  let spentThisMonth = 0;
+
+  for (const r of values) {
+    if (String(r[2]) !== account) continue;
+    const type = r[3];
+    const date = dateStr_(r[9]);
+    const amt = (r[6] !== '' && r[6] !== null) ? Number(r[6]) : Number(r[4]); // convertedAmount, else raw
+    if (type === 'cancelled' || !isFinite(amt)) continue;
+
+    if (date >= startingDate) balance += (type === 'credit' ? amt : -amt);
+    if (type === 'debit' && date.slice(0, 7) === monthPrefix) spentThisMonth += amt;
+  }
+
+  const text = `${account}\nBalance: ${BASE_CURRENCY} ${balance.toFixed(2)}\nSpent this month: ${BASE_CURRENCY} ${spentThisMonth.toFixed(2)}`;
+  return { ok: true, text: text, balance: balance, spentThisMonth: spentThisMonth };
+}
+
+// ---------- COMBANK rate scraping ----------
+
+function fetchCombankRate_(currencyCode) {
+  if (currencyCode === BASE_CURRENCY) return 1;
+  const label = COMBANK_LABELS[currencyCode];
+  if (!label) return null; // not on COMBANK's page (e.g. MYR)
+
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'rate_' + currencyCode;
+  const cached = cache.get(cacheKey);
+  if (cached) return Number(cached);
+
+  let html;
+  try {
+    html = UrlFetchApp.fetch('https://www.combank.lk/rates-tariff', { muteHttpExceptions: true }).getContentText();
+  } catch (err) {
+    return null;
+  }
+
+  const nameIdx = html.indexOf(label);
+  if (nameIdx === -1) return null;
+  const chunk = html.slice(nameIdx, nameIdx + 1500);
+  const re = /<td[^>]*style="text-align:right"[^>]*>\s*([\d,]+\.?\d*|-)\s*<\/td>/g;
+  const values = [];
+  let m;
+  while ((m = re.exec(chunk)) && values.length < 6) values.push(m[1]);
+  if (values.length < 6) return null;
+
+  // Columns are [Currency-notes Buy, Sell, Cheques Buy, Sell, Telegraphic-Transfer Buy, Sell].
+  // TT Selling is the best proxy for a card purchase; fall back to Cheques, then cash notes,
+  // for currencies COMBANK doesn't quote a TT rate for (e.g. Kuwaiti Dinars).
+  const candidates = [values[5], values[3], values[1]];
+  const rateStr = candidates.find((v) => v && v !== '-');
+  if (!rateStr) return null;
+
+  const rate = Number(rateStr.replace(/,/g, ''));
+  if (!isFinite(rate) || rate <= 0) return null;
+
+  cache.put(cacheKey, String(rate), 300); // 5 minutes, so a burst of transactions doesn't refetch every time
+  return rate;
+}
+
+// ---------- Small helpers ----------
+
+function todayISO_() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+}
+
+function dateStr_(value) {
+  if (value instanceof Date) return Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  return String(value);
+}
+
+function json_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}

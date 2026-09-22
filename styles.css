@@ -78,6 +78,19 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .icon-btn:active { background: var(--surface-2); }
 .icon-btn svg { width: 22px; height: 22px; }
 
+.account-bar {
+  display: flex; gap: 8px; overflow-x: auto; padding: 2px 16px 10px;
+  max-width: 640px; margin: 0 auto; scrollbar-width: none;
+}
+.account-bar::-webkit-scrollbar { display: none; }
+.acct-pill {
+  flex: none; display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px;
+  border-radius: 99px; background: var(--surface-2); border: 1.5px solid transparent;
+  font-size: 13px; font-weight: 600; color: var(--muted); white-space: nowrap;
+}
+.acct-pill[aria-selected="true"] { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 14%, var(--surface)); }
+.acct-pill.add { color: var(--accent); }
+
 /* ---------- Layout ---------- */
 main { max-width: 640px; margin: 0 auto; padding: 4px 16px calc(var(--tabbar-h) + 110px + env(safe-area-inset-bottom)); }
 .view > * + * { margin-top: 14px; }
@@ -104,6 +117,11 @@ h2.section-title {
 .budget-text .over { color: var(--danger); font-weight: 600; }
 .summary .meta { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .result-line { color: var(--muted); font-size: 14px; padding: 0 4px; }
+
+.balance-card { display: flex; justify-content: space-between; align-items: center; }
+.balance-card .label { color: var(--muted); font-size: 14px; }
+.balance-card .amt { font-size: 22px; font-weight: 750; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.balance-card .amt.neg { color: var(--danger); }
 
 /* ---------- Search ---------- */
 .search input {
@@ -177,6 +195,14 @@ h2.section-title {
 .field input:focus, .field select:focus { border-color: var(--accent); }
 .group .field input, .group .field select { text-align: right; max-width: 60%; }
 
+.field-stack { display: block; padding: 12px 0; }
+.field-stack > span { display: block; font-weight: 500; margin-bottom: 6px; }
+.field-stack input {
+  width: 100%; height: 44px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface-2); padding: 0 12px; outline: none;
+}
+.field-stack input:focus { border-color: var(--accent); }
+
 .cat-list { list-style: none; margin: 0; padding: 0; }
 .cat-list li { display: flex; align-items: center; gap: 12px; min-height: 52px; }
 .cat-list li + li { border-top: 1px solid var(--border); }
@@ -238,20 +264,40 @@ h2.section-title {
 .toast button { background: none; border: 0; padding: 4px 2px; font-weight: 700; color: inherit; text-decoration: underline; }
 
 /* ---------- Add / edit sheet ---------- */
-dialog#sheet {
+dialog#sheet, dialog#accountSheet {
   margin: auto 0 0 0; width: 100%; max-width: none; max-height: 92dvh; overflow: auto;
   border: 0; padding: 0; border-radius: 22px 22px 0 0;
   background: var(--surface); color: var(--text);
   animation: slide-up .22s ease-out;
 }
-dialog#sheet::backdrop { background: rgba(0, 0, 0, .45); }
+dialog#sheet::backdrop, dialog#accountSheet::backdrop { background: rgba(0, 0, 0, .45); }
 @keyframes slide-up { from { transform: translateY(40px); opacity: 0; } }
 @media (min-width: 640px) {
-  dialog#sheet { margin: auto; max-width: 480px; border-radius: 22px; }
+  dialog#sheet, dialog#accountSheet { margin: auto; max-width: 480px; border-radius: 22px; }
 }
 #expenseForm { padding: 8px 20px calc(20px + env(safe-area-inset-bottom)); display: grid; gap: 4px; }
+#accountForm { padding: 8px 20px calc(20px + env(safe-area-inset-bottom)); display: grid; }
+#accountForm .field-stack + .field-stack { border-top: 1px solid var(--border); }
+#accountForm .note { margin: 4px 0 8px; }
 .sheet-head { display: flex; align-items: center; justify-content: space-between; }
 .sheet-head h2 { margin: 0; font-size: 18px; }
+
+.seg { display: flex; background: var(--surface-2); border-radius: 12px; padding: 3px; margin-top: 10px; }
+.seg-opt { position: relative; flex: 1; }
+.seg-opt input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.seg-opt span {
+  display: block; text-align: center; height: 38px; line-height: 38px; border-radius: 9px;
+  font-size: 14px; font-weight: 600; color: var(--muted);
+}
+.seg-opt input:checked + span { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.seg-opt input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.fx-toggle { display: block; margin: 4px auto 0; background: none; border: 0; color: var(--accent); font-size: 13px; font-weight: 600; padding: 6px; }
+.fx-row { display: flex; align-items: center; gap: 10px; padding: 4px 4px 8px; }
+.fx-row select { height: 40px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); padding: 0 10px; outline: none; }
+.fx-row select:focus { border-color: var(--accent); }
+.fx-note { font-size: 13px; color: var(--muted); flex: 1; }
+
 .amount-field { display: flex; align-items: baseline; justify-content: center; gap: 6px; padding: 12px 0 16px; }
 .amount-field .cur { font-size: 28px; color: var(--muted); font-weight: 600; }
 .amount-field input {

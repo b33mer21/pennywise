@@ -32,6 +32,7 @@
         </div>
         <h1 class="page-title" id="pageTitle" hidden>Settings</h1>
       </div>
+      <div class="account-bar" id="accountBar" role="tablist" aria-label="Account"></div>
     </header>
 
     <main>
@@ -83,10 +84,21 @@
         </button>
       </div>
 
+      <div class="seg" id="typeToggle" role="radiogroup" aria-label="Type">
+        <label class="seg-opt"><input type="radio" name="txType" value="debit" checked><span>Expense</span></label>
+        <label class="seg-opt"><input type="radio" name="txType" value="credit"><span>Income</span></label>
+      </div>
+
       <label class="amount-field">
         <span class="cur" id="curSymbol">$</span>
         <input id="amount" inputmode="decimal" autocomplete="off" placeholder="0.00" aria-label="Amount">
       </label>
+
+      <button type="button" class="fx-toggle" id="fxToggle">Different currency?</button>
+      <div class="fx-row" id="fxRow" hidden>
+        <select id="fxCurrency" aria-label="Original currency"></select>
+        <span class="fx-note" id="fxNote"></span>
+      </div>
 
       <div class="field-label" id="catLabel">Category</div>
       <div class="chips" id="chips" role="radiogroup" aria-labelledby="catLabel"></div>
@@ -104,6 +116,38 @@
 
       <div class="sheet-actions">
         <button type="button" class="btn danger" id="deleteBtn" hidden>Delete</button>
+        <button type="submit" class="btn primary" id="saveBtn">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="accountSheet" aria-labelledby="accountSheetTitle">
+    <form id="accountForm" novalidate>
+      <div class="sheet-head">
+        <h2 id="accountSheetTitle">New account</h2>
+        <button type="button" class="icon-btn" id="accountSheetClose" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+
+      <label class="field-stack"><span>Name</span>
+        <input id="acctName" maxlength="40" placeholder="e.g. NTB Savings" autocomplete="off" required></label>
+      <label class="field-stack"><span>Currency</span>
+        <select id="acctCurrency"></select></label>
+      <label class="field-stack"><span>Starting balance</span>
+        <input id="acctBalance" inputmode="decimal" autocomplete="off" placeholder="0.00"></label>
+      <label class="field-stack"><span>As of date</span>
+        <input type="date" id="acctBalanceDate"></label>
+      <label class="field-stack"><span>Monthly budget</span>
+        <input id="acctBudget" inputmode="decimal" autocomplete="off" placeholder="None"></label>
+      <label class="field-stack"><span>Sync tag</span>
+        <input id="acctTag" maxlength="40" autocomplete="off" spellcheck="false" placeholder="e.g. combank or ntb"></label>
+      <p class="note">The sync tag must exactly match the "account" value the iOS Shortcut sends for this bank, so incoming SMS transactions land in the right place.</p>
+
+      <p class="form-error" id="accountFormError" role="alert" hidden></p>
+
+      <div class="sheet-actions">
+        <button type="button" class="btn danger" id="acctDeleteBtn" hidden>Delete</button>
         <button type="submit" class="btn primary">Save</button>
       </div>
     </form>

@@ -3,7 +3,7 @@
 
   /* ---------- Constants ---------- */
 
-  const STORE_KEY = 'pennywise:v1';
+  const STORE_KEY = 'pennywise:v2';
 
   const DEFAULT_CATEGORIES = [
     { id: 'food', name: 'Food & Dining', emoji: '🍔', color: '#E4572E' },
@@ -20,19 +20,40 @@
   ];
   const EXTRA_COLORS = ['#D946EF', '#F43F5E', '#0EA5E9', '#65A30D', '#EA580C', '#7C3AED'];
   const FALLBACK_CATEGORY = DEFAULT_CATEGORIES[DEFAULT_CATEGORIES.length - 1];
+  const INCOME_BADGE = { emoji: '💰', color: '#0EA5E9' };
 
   const CURRENCIES = [
-    'USD', 'EUR', 'GBP', 'INR', 'PKR', 'BDT', 'AED', 'SAR', 'QAR', 'KWD', 'CAD', 'AUD', 'NZD',
+    'LKR', 'USD', 'EUR', 'GBP', 'INR', 'PKR', 'BDT', 'AED', 'SAR', 'QAR', 'KWD', 'CAD', 'AUD', 'NZD',
     'JPY', 'CNY', 'KRW', 'SGD', 'MYR', 'IDR', 'PHP', 'THB', 'TRY', 'EGP', 'NGN', 'ZAR', 'KES',
-    'CHF', 'SEK', 'NOK', 'DKK', 'PLN', 'BRL', 'MXN',
+    'CHF', 'SEK', 'NOK', 'DKK', 'PLN', 'BRL', 'MXN', 'OMR', 'JOD', 'BHD',
   ];
   const REGION_CURRENCY = {
-    US: 'USD', GB: 'GBP', IN: 'INR', PK: 'PKR', BD: 'BDT', AE: 'AED', SA: 'SAR', QA: 'QAR', KW: 'KWD',
+    US: 'USD', GB: 'GBP', IN: 'INR', PK: 'PKR', LK: 'LKR', BD: 'BDT', AE: 'AED', SA: 'SAR', QA: 'QAR', KW: 'KWD',
     CA: 'CAD', AU: 'AUD', NZ: 'NZD', JP: 'JPY', CN: 'CNY', KR: 'KRW', SG: 'SGD', MY: 'MYR', ID: 'IDR',
     PH: 'PHP', TH: 'THB', TR: 'TRY', EG: 'EGP', NG: 'NGN', ZA: 'ZAR', KE: 'KES', CH: 'CHF', SE: 'SEK',
     NO: 'NOK', DK: 'DKK', PL: 'PLN', BR: 'BRL', MX: 'MXN',
     DE: 'EUR', FR: 'EUR', ES: 'EUR', IT: 'EUR', NL: 'EUR', IE: 'EUR', PT: 'EUR', AT: 'EUR', BE: 'EUR', FI: 'EUR', GR: 'EUR',
   };
+
+  // Best-effort category guess for auto-synced transactions, keyed to ids in DEFAULT_CATEGORIES.
+  // Matched against the merchant name and/or the raw SMS text, case-insensitively.
+  const CATEGORY_HINTS = {
+    food: ['restaurant', 'cafe', 'coffee', 'kfc', 'pizza', 'dining', 'burger', 'bakery', 'hotel de', 'food court'],
+    groceries: ['super', 'mart', 'grocery', 'cargills', 'keells', 'arpico', 'foodcity', 'laugfs'],
+    transport: ['uber', 'pickme', 'taxi', 'cab', 'fuel', 'petrol', 'diesel', 'filling station', 'ioc', 'ceypetco'],
+    bills: ['electricity', 'ceb', 'water board', 'nwsdb', 'utility', 'telecom', 'dialog', 'mobitel', 'slt', 'hutch', 'airtel', 'bill payment', 'amazon prime', 'netflix', 'spotify', 'youtube premium'],
+    shopping: ['shop', 'store', 'fashion', 'mall', 'odel', 'amazon', 'daraz'],
+    health: ['pharmacy', 'hospital', 'clinic', 'medical', 'asiri', 'nawaloka', 'durdans'],
+    fun: ['cinema', 'movie', 'pvr', 'scope'],
+    travel: ['airline', 'airways', 'hotel', 'booking.com', 'airbnb', 'expedia', 'ride'],
+  };
+  function guessCategory(text) {
+    const t = String(text || '').toLowerCase();
+    for (const [id, words] of Object.entries(CATEGORY_HINTS)) {
+      if (words.some((w) => t.includes(w))) return id;
+    }
+    return 'other';
+  }
 
   /* ---------- Small helpers ---------- */
 
@@ -42,7 +63,6 @@
   const parseISO = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
   const monthKey = (y, m) => `${y}-${pad(m + 1)}`;
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  const sum = (items) => items.reduce((t, e) => t + e.amount, 0);
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
   ));
@@ -78,23 +98,57 @@
 
   /* ---------- State + storage ---------- */
 
-  function freshState() {
+  function freshAccount(overrides) {
     return {
-      expenses: [],
+      id: uid(),
+      name: 'Main Account',
+      currency: guessCurrency(),
+      remoteTag: '',
+      startingBalance: 0,
+      startingDate: isoDate(new Date()),
+      budget: 0,
+      ...overrides,
+    };
+  }
+
+  function freshState() {
+    const acct = freshAccount({});
+    return {
+      accounts: [acct],
+      activeAccountId: acct.id,
+      transactions: [],
       settings: {
-        currency: guessCurrency(),
-        budget: 0,
         lastCategory: 'food',
         categories: DEFAULT_CATEGORIES.map((c) => ({ ...c })),
+        syncUrl: '',
+        syncSecret: '',
+        syncCursor: 0,
+        syncLastAt: 0,
       },
     };
   }
 
-  /** Coerces anything loaded from storage or a backup file into a valid state. */
+  function normalizeAccount(a) {
+    if (!a || typeof a !== 'object') return null;
+    if (typeof a.id !== 'string' || !a.id) return null;
+    return {
+      id: a.id,
+      name: typeof a.name === 'string' && a.name.trim() ? a.name.trim().slice(0, 40) : 'Account',
+      currency: (typeof a.currency === 'string' && isValidCurrency(a.currency)) ? a.currency : 'LKR',
+      remoteTag: typeof a.remoteTag === 'string' ? a.remoteTag.trim().slice(0, 40) : '',
+      startingBalance: Number.isFinite(a.startingBalance) ? Math.round(a.startingBalance) : 0,
+      startingDate: /^\d{4}-\d{2}-\d{2}$/.test(a.startingDate) ? a.startingDate : isoDate(new Date()),
+      budget: Number.isFinite(a.budget) && a.budget > 0 ? Math.round(a.budget) : 0,
+    };
+  }
+
+  /** Coerces anything loaded from storage or a backup file into a valid state. Migrates the old
+   * single-ledger v1 shape (flat `expenses` + `settings.currency`/`budget`) into one default account. */
   function normalize(data) {
     const base = freshState();
     const src = (data && typeof data === 'object') ? data : {};
     const s = (src.settings && typeof src.settings === 'object') ? src.settings : {};
+    const isLegacy = !Array.isArray(src.accounts) && Array.isArray(src.expenses);
 
     let categories = Array.isArray(s.categories)
       ? s.categories
@@ -103,26 +157,61 @@
       : [];
     if (!categories.length) categories = base.settings.categories;
     if (!categories.some((c) => c.id === 'other')) categories.push({ ...FALLBACK_CATEGORY });
-    const known = new Set(categories.map((c) => c.id));
+    const knownCats = new Set(categories.map((c) => c.id));
 
-    const expenses = (Array.isArray(src.expenses) ? src.expenses : [])
-      .filter((e) => e && Number.isFinite(e.amount) && e.amount > 0 && /^\d{4}-\d{2}-\d{2}$/.test(e.date))
-      .map((e) => ({
-        id: String(e.id || uid()),
-        amount: Math.round(e.amount),
-        category: known.has(e.category) ? e.category : 'other',
-        date: e.date,
-        note: String(e.note || '').slice(0, 200),
-        createdAt: Number(e.createdAt) || Date.now(),
-      }));
+    let accounts;
+    if (isLegacy) {
+      accounts = [freshAccount({
+        id: 'default',
+        name: 'Main Account',
+        currency: (typeof s.currency === 'string' && isValidCurrency(s.currency)) ? s.currency : base.accounts[0].currency,
+        budget: Number.isFinite(s.budget) && s.budget > 0 ? Math.round(s.budget) : 0,
+      })];
+    } else {
+      accounts = (Array.isArray(src.accounts) ? src.accounts : []).map(normalizeAccount).filter(Boolean);
+      if (!accounts.length) accounts = [freshAccount({})];
+    }
+    const knownAccounts = new Set(accounts.map((a) => a.id));
+    const firstAccountId = accounts[0].id;
+
+    const activeAccountId = knownAccounts.has(src.activeAccountId) ? src.activeAccountId : firstAccountId;
+
+    const rawTx = isLegacy
+      ? (src.expenses || []).map((e) => ({ ...e, accountId: 'default', type: 'debit' }))
+      : (Array.isArray(src.transactions) ? src.transactions : []);
+
+    const transactions = rawTx
+      .filter((t) => t && Number.isFinite(t.amount) && t.amount > 0 && /^\d{4}-\d{2}-\d{2}$/.test(t.date))
+      .map((t) => {
+        const type = t.type === 'credit' ? 'credit' : 'debit';
+        return {
+          id: String(t.id || uid()),
+          accountId: knownAccounts.has(t.accountId) ? t.accountId : firstAccountId,
+          type,
+          amount: Math.round(t.amount),
+          category: type === 'debit' ? (knownCats.has(t.category) ? t.category : 'other') : '',
+          date: t.date,
+          note: String(t.note || '').slice(0, 200),
+          createdAt: Number(t.createdAt) || Date.now(),
+          remote: Boolean(t.remote),
+          originalAmount: Number.isFinite(t.originalAmount) && t.originalAmount > 0 ? Math.round(t.originalAmount) : undefined,
+          originalCurrency: (typeof t.originalCurrency === 'string' && isValidCurrency(t.originalCurrency)) ? t.originalCurrency : undefined,
+          fxRate: Number.isFinite(t.fxRate) && t.fxRate > 0 ? t.fxRate : undefined,
+          unconverted: Boolean(t.unconverted),
+        };
+      });
 
     return {
-      expenses,
+      accounts,
+      activeAccountId,
+      transactions,
       settings: {
-        currency: (typeof s.currency === 'string' && isValidCurrency(s.currency)) ? s.currency : base.settings.currency,
-        budget: Number.isFinite(s.budget) && s.budget > 0 ? Math.round(s.budget) : 0,
-        lastCategory: known.has(s.lastCategory) ? s.lastCategory : 'food',
+        lastCategory: knownCats.has(s.lastCategory) ? s.lastCategory : 'food',
         categories,
+        syncUrl: typeof s.syncUrl === 'string' && /^https:\/\//i.test(s.syncUrl) ? s.syncUrl.trim() : '',
+        syncSecret: typeof s.syncSecret === 'string' ? s.syncSecret.trim().slice(0, 200) : '',
+        syncCursor: Number.isFinite(s.syncCursor) && s.syncCursor >= 0 ? Math.floor(s.syncCursor) : 0,
+        syncLastAt: Number.isFinite(s.syncLastAt) ? s.syncLastAt : 0,
       },
     };
   }
@@ -133,6 +222,8 @@
     try {
       const raw = localStorage.getItem(STORE_KEY);
       if (raw) return normalize(JSON.parse(raw));
+      const legacyRaw = localStorage.getItem('pennywise:v1'); // pre-accounts data, migrate once
+      if (legacyRaw) return normalize(JSON.parse(legacyRaw));
     } catch (e) {
       storageOk = false;
     }
@@ -155,17 +246,35 @@
   const now0 = new Date();
   const ui = { tab: 'list', year: now0.getFullYear(), month: now0.getMonth(), query: '' };
 
+  /* ---------- Accounts ---------- */
+
+  const activeAccount = () => state.accounts.find((a) => a.id === state.activeAccountId) || state.accounts[0];
+  const acctById = (id) => state.accounts.find((a) => a.id === id);
+
+  function computeBalance(account) {
+    let bal = account.startingBalance;
+    for (const t of state.transactions) {
+      if (t.accountId !== account.id || t.date < account.startingDate) continue;
+      bal += t.type === 'credit' ? t.amount : -t.amount;
+    }
+    return bal;
+  }
+
   /* ---------- Formatting ---------- */
 
   let moneyFmt;
   let compactFmt;
   function setFormatters() {
-    const currency = state.settings.currency;
+    const currency = activeAccount().currency;
     moneyFmt = new Intl.NumberFormat(undefined, { style: 'currency', currency });
     compactFmt = new Intl.NumberFormat(undefined, { style: 'currency', currency, notation: 'compact', maximumFractionDigits: 1 });
   }
   const money = (cents) => moneyFmt.format(cents / 100);
   const moneyCompact = (cents) => compactFmt.format(cents / 100);
+  const moneyIn = (cents, currency) => {
+    try { return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(cents / 100); }
+    catch (e) { return `${currency} ${(cents / 100).toFixed(2)}`; }
+  };
 
   const catById = (id) => state.settings.categories.find((c) => c.id === id) || FALLBACK_CATEGORY;
   const monthName = (y, m, opts) => new Date(y, m, 1).toLocaleDateString(undefined, opts);
@@ -183,12 +292,22 @@
   }
 
   const byNewest = (a, b) => (a.date === b.date ? b.createdAt - a.createdAt : (a.date < b.date ? 1 : -1));
-  const inMonth = (e, y = ui.year, m = ui.month) => e.date.startsWith(monthKey(y, m));
+  const inMonth = (t, y = ui.year, m = ui.month) => t.date.startsWith(monthKey(y, m));
+  const sum = (items) => items.reduce((t, x) => t + x.amount, 0);
 
   /* ---------- Rendering: shell ---------- */
 
+  function renderAccountBar() {
+    const bar = $('#accountBar');
+    bar.innerHTML = state.accounts.map((a) => (
+      `<button type="button" class="acct-pill" data-id="${esc(a.id)}" role="tab" aria-selected="${a.id === state.activeAccountId}">${esc(a.name)}</button>`
+    )).join('') + '<button type="button" class="acct-pill add" data-add-account>+ Account</button>';
+  }
+
   function render() {
+    if (!acctById(state.activeAccountId)) state.activeAccountId = state.accounts[0].id;
     setFormatters();
+    renderAccountBar();
 
     $('#monthNav').hidden = ui.tab === 'settings';
     $('#pageTitle').hidden = ui.tab !== 'settings';
@@ -206,62 +325,85 @@
     else renderSettings();
   }
 
-  /* ---------- Rendering: expenses list ---------- */
+  /* ---------- Rendering: transactions list ---------- */
+
+  function txSubtitle(t, cat) {
+    const parts = [];
+    if (t.type === 'credit') parts.push('Income');
+    else if (t.note) parts.push(cat.name);
+    if (t.originalCurrency) {
+      const orig = `${t.originalCurrency} ${(t.originalAmount / 100).toFixed(2)}`;
+      parts.push(t.fxRate ? `${orig} @ ${t.fxRate.toFixed(2)}` : `${orig} ⚠ not converted`);
+    }
+    if (t.remote) parts.push('Auto · SMS');
+    return parts.join(' · ');
+  }
 
   function renderList() {
+    const acct = activeAccount();
     const q = ui.query.trim().toLowerCase();
+    const all = state.transactions.filter((t) => t.accountId === acct.id);
     let items;
     let head;
 
     if (q) {
-      items = state.expenses.filter((e) => (
-        e.note.toLowerCase().includes(q)
-        || catById(e.category).name.toLowerCase().includes(q)
-        || (e.amount / 100).toFixed(2).includes(q)
+      items = all.filter((t) => (
+        t.note.toLowerCase().includes(q)
+        || (t.category && catById(t.category).name.toLowerCase().includes(q))
+        || (t.amount / 100).toFixed(2).includes(q)
       ));
-      head = `<div class="result-line">${items.length} result${items.length === 1 ? '' : 's'} · ${money(sum(items))}</div>`;
+      const spend = sum(items.filter((t) => t.type === 'debit')) - sum(items.filter((t) => t.type === 'credit'));
+      head = `<div class="result-line">${items.length} result${items.length === 1 ? '' : 's'} · net ${money(spend)}</div>`;
     } else {
-      items = state.expenses.filter((e) => inMonth(e));
-      head = summaryHtml(items);
+      items = all.filter((t) => inMonth(t));
+      head = balanceHtml(acct) + summaryHtml(items, acct);
     }
     $('#summary').innerHTML = head;
 
     if (!items.length) {
       $('#entries').innerHTML = q
         ? '<div class="empty"><span class="emoji">🔍</span><strong>No matches</strong>Try a different search.</div>'
-        : `<div class="empty"><span class="emoji">🧾</span><strong>No expenses in ${esc(monthName(ui.year, ui.month, { month: 'long' }))}</strong>Tap the + button to add one.</div>`;
+        : `<div class="empty"><span class="emoji">🧾</span><strong>Nothing in ${esc(monthName(ui.year, ui.month, { month: 'long' }))}</strong>Tap the + button to add something.</div>`;
       return;
     }
 
     const groups = new Map();
-    for (const e of [...items].sort(byNewest)) {
-      if (!groups.has(e.date)) groups.set(e.date, []);
-      groups.get(e.date).push(e);
+    for (const t of [...items].sort(byNewest)) {
+      if (!groups.has(t.date)) groups.set(t.date, []);
+      groups.get(t.date).push(t);
     }
 
     let html = '';
     for (const [date, list] of groups) {
-      html += `<section class="day"><div class="day-head"><span>${esc(dayLabel(date))}</span><span class="num">${money(sum(list))}</span></div><ul class="day-list">`;
-      for (const e of list) {
-        const cat = catById(e.category);
-        html += `<li><button type="button" class="row" data-id="${esc(e.id)}">
+      const dayNet = sum(list.filter((t) => t.type === 'debit')) - sum(list.filter((t) => t.type === 'credit'));
+      html += `<section class="day"><div class="day-head"><span>${esc(dayLabel(date))}</span><span class="num">${money(Math.abs(dayNet))}</span></div><ul class="day-list">`;
+      for (const t of list) {
+        const cat = t.type === 'credit' ? INCOME_BADGE : catById(t.category);
+        const sub = txSubtitle(t, cat);
+        const title = t.note || (t.type === 'credit' ? 'Income' : cat.name);
+        html += `<li><button type="button" class="row" data-id="${esc(t.id)}">
           <span class="badge" style="background:${tint(cat.color)}">${esc(cat.emoji)}</span>
-          <span class="row-main"><span class="row-title">${esc(e.note || cat.name)}</span>${e.note ? `<span class="row-sub">${esc(cat.name)}</span>` : ''}</span>
-          <span class="row-amt">${money(e.amount)}</span></button></li>`;
+          <span class="row-main"><span class="row-title">${esc(title)}</span>${sub ? `<span class="row-sub">${esc(sub)}</span>` : ''}</span>
+          <span class="row-amt${t.type === 'credit' ? ' credit' : ''}">${t.type === 'credit' ? '+' : ''}${money(t.amount)}</span></button></li>`;
       }
       html += '</ul></section>';
     }
     $('#entries').innerHTML = html;
   }
 
-  function summaryHtml(items) {
-    const total = sum(items);
+  function balanceHtml(acct) {
+    const bal = computeBalance(acct);
+    return `<div class="card balance-card"><span class="label">${esc(acct.name)} balance</span><span class="amt${bal < 0 ? ' neg' : ''}">${money(bal)}</span></div>`;
+  }
+
+  function summaryHtml(items, acct) {
+    const total = sum(items.filter((t) => t.type === 'debit'));
     const today = new Date();
     const monthIndex = ui.year * 12 + ui.month;
     const nowIndex = today.getFullYear() * 12 + today.getMonth();
     const days = monthIndex === nowIndex ? today.getDate() : new Date(ui.year, ui.month + 1, 0).getDate();
     const avg = monthIndex > nowIndex ? 0 : Math.round(total / days);
-    const budget = state.settings.budget;
+    const budget = acct.budget;
 
     let budgetHtml = '';
     if (budget > 0) {
@@ -275,7 +417,7 @@
       <div class="label">Spent in ${esc(monthName(ui.year, ui.month, { month: 'long' }))}</div>
       <div class="total">${money(total)}</div>
       ${budgetHtml}
-      <div class="meta"><span>${items.length} expense${items.length === 1 ? '' : 's'}</span><span class="num">${money(avg)} / day</span></div>
+      <div class="meta"><span>${items.length} entr${items.length === 1 ? 'y' : 'ies'}</span><span class="num">${money(avg)} / day</span></div>
     </div>`;
   }
 
@@ -283,7 +425,7 @@
 
   function categoryTotals(items) {
     const map = new Map();
-    for (const e of items) map.set(e.category, (map.get(e.category) || 0) + e.amount);
+    for (const t of items) map.set(t.category, (map.get(t.category) || 0) + t.amount);
     return [...map].map(([id, total]) => ({ cat: catById(id), total })).sort((a, b) => b.total - a.total);
   }
 
@@ -300,12 +442,14 @@
   }
 
   function renderStats() {
-    const items = state.expenses.filter((e) => inMonth(e));
+    const acct = activeAccount();
+    const forAccount = (y, m) => state.transactions.filter((t) => t.accountId === acct.id && t.type === 'debit' && inMonth(t, y, m));
+    const items = forAccount(ui.year, ui.month);
     const total = sum(items);
     const host = $('#view-stats');
 
     const prev = new Date(ui.year, ui.month - 1, 1);
-    const prevTotal = sum(state.expenses.filter((e) => inMonth(e, prev.getFullYear(), prev.getMonth())));
+    const prevTotal = sum(forAccount(prev.getFullYear(), prev.getMonth()));
     let compare = '';
     if (prevTotal > 0 && total > 0) {
       const change = Math.round(((total - prevTotal) / prevTotal) * 100);
@@ -331,9 +475,10 @@
 
     // Six-month trend ending at the selected month.
     const totals = new Map();
-    for (const e of state.expenses) {
-      const key = e.date.slice(0, 7);
-      totals.set(key, (totals.get(key) || 0) + e.amount);
+    for (const t of state.transactions) {
+      if (t.accountId !== acct.id || t.type !== 'debit') continue;
+      const key = t.date.slice(0, 7);
+      totals.set(key, (totals.get(key) || 0) + t.amount);
     }
     const months = [];
     for (let i = 5; i >= 0; i--) {
@@ -353,20 +498,27 @@
 
   /* ---------- Rendering: settings ---------- */
 
+  function currencyOptions(selected, namesFmt) {
+    const codes = CURRENCIES.includes(selected) ? CURRENCIES : [selected, ...CURRENCIES];
+    return codes.map((c) => `<option value="${c}"${c === selected ? ' selected' : ''}>${c}${namesFmt ? ' – ' + esc(namesFmt.of(c) || '') : ''}</option>`).join('');
+  }
+
   function renderSettings() {
     const s = state.settings;
     let names = null;
     try { names = new Intl.DisplayNames(undefined, { type: 'currency' }); } catch (e) { /* fall back to codes */ }
-    const codes = CURRENCIES.includes(s.currency) ? CURRENCIES : [s.currency, ...CURRENCIES];
 
     $('#view-settings').innerHTML = `
+      <h2 class="section-title">Accounts</h2>
       <div class="card group">
-        <label class="field"><span>Currency</span>
-          <select id="currency">${codes.map((c) => `<option value="${c}"${c === s.currency ? ' selected' : ''}>${c}${names ? ' – ' + esc(names.of(c) || '') : ''}</option>`).join('')}</select>
-        </label>
-        <label class="field"><span>Monthly budget</span>
-          <input id="budget" inputmode="decimal" autocomplete="off" placeholder="None" value="${s.budget ? s.budget / 100 : ''}">
-        </label>
+        <ul class="cat-list">${state.accounts.map((a) => `<li>
+          <span class="badge" style="background:${tint('#0B7A5A')}">${a.id === state.activeAccountId ? '★' : '🏦'}</span>
+          <span class="name">${esc(a.name)} <span style="color:var(--muted);font-weight:400">(${esc(a.currency)}${a.remoteTag ? ' · ' + esc(a.remoteTag) : ''})</span></span>
+          <button type="button" class="link-btn" data-edit-account="${esc(a.id)}" style="color:var(--accent)">Edit</button></li>`).join('')}
+        </ul>
+      </div>
+      <div class="card btn-stack">
+        <button type="button" class="btn" data-add-account>+ Add account</button>
       </div>
 
       <h2 class="section-title">Categories</h2>
@@ -382,6 +534,21 @@
         </form>
       </div>
 
+      <h2 class="section-title">Automatic sync (SMS → transactions)</h2>
+      <div class="card group">
+        <label class="field-stack"><span>Sync URL</span>
+          <input id="syncUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false"
+            placeholder="https://script.google.com/macros/s/…/exec" value="${esc(s.syncUrl)}"></label>
+        <label class="field-stack"><span>Secret</span>
+          <input id="syncSecret" type="text" autocomplete="off" spellcheck="false"
+            placeholder="Shared secret from your script" value="${esc(s.syncSecret)}"></label>
+      </div>
+      <div class="card btn-stack">
+        <button type="button" class="btn" data-act="sync">Sync now</button>
+      </div>
+      <p class="note">${syncStatusText(s)}
+        Each account's Sync tag (edit an account above) must match the "account" value its iOS Shortcut sends.</p>
+
       <h2 class="section-title">Your data</h2>
       <div class="card btn-stack">
         <button type="button" class="btn" data-act="csv">Export as CSV</button>
@@ -389,9 +556,18 @@
         <label class="btn file-btn">Restore from backup<input type="file" id="restore" accept="application/json,.json" hidden></label>
         <button type="button" class="btn danger" data-act="erase">Erase all data</button>
       </div>
-      <p class="note">${state.expenses.length} expense${state.expenses.length === 1 ? '' : 's'} stored on this device only. Nothing is sent anywhere.
+      <p class="note">${state.transactions.length} entr${state.transactions.length === 1 ? 'y' : 'ies'} across ${state.accounts.length} account${state.accounts.length === 1 ? '' : 's'}, stored on this device only.
         ${storageOk ? '' : '<strong>Storage is unavailable, so changes will be lost when you close the app.</strong>'}
-        Back up now and then, because clearing Safari data or deleting the app also deletes your expenses.</p>`;
+        Back up now and then, because clearing Safari data or deleting the app also deletes everything.
+        A backup file includes your sync secret, so keep it as private as a password.</p>`;
+  }
+
+  function syncStatusText(s) {
+    if (!s.syncUrl || !s.syncSecret) {
+      return 'Auto-import bank SMS as transactions, free, via a Google Sheet and an iOS Shortcut. See the README for setup, then paste the Web App URL and secret above.';
+    }
+    if (!s.syncLastAt) return 'Set up but not synced yet. Tap "Sync now" once the iOS Shortcut has sent at least one transaction.';
+    return `Last synced ${new Date(s.syncLastAt).toLocaleString()}. Opening the app checks for new transactions automatically.`;
   }
 
   /* ---------- Toast ---------- */
@@ -410,32 +586,55 @@
   }
   function hideToast() { clearTimeout(toastTimer); $('#toast').hidden = true; }
 
-  /* ---------- Add / edit sheet ---------- */
+  /* ---------- Add / edit transaction sheet ---------- */
 
   const sheet = $('#sheet');
   let editingId = null;
 
-  function openSheet(expense) {
-    editingId = expense ? expense.id : null;
-    $('#sheetTitle').textContent = expense ? 'Edit expense' : 'New expense';
-    $('#deleteBtn').hidden = !expense;
+  function openSheet(tx) {
+    editingId = tx ? tx.id : null;
+    const acct = activeAccount();
+    $('#sheetTitle').textContent = tx ? 'Edit entry' : 'New entry';
+    $('#deleteBtn').hidden = !tx;
     $('#formError').hidden = true;
+
+    const type = tx ? tx.type : 'debit';
+    document.querySelector(`#typeToggle input[value="${type}"]`).checked = true;
+    updateSheetForType(type);
 
     const symbol = moneyFmt.formatToParts(0).find((p) => p.type === 'currency');
     $('#curSymbol').textContent = symbol ? symbol.value : '';
 
-    const selected = expense ? expense.category : state.settings.lastCategory;
+    const selected = tx ? tx.category : state.settings.lastCategory;
     $('#chips').innerHTML = state.settings.categories.map((c) => `<label class="chip">
       <input type="radio" name="cat" value="${esc(c.id)}"${c.id === selected ? ' checked' : ''}><span>${esc(c.emoji)} ${esc(c.name)}</span></label>`).join('');
 
-    $('#amount').value = expense ? String(expense.amount / 100) : '';
+    $('#fxCurrency').innerHTML = CURRENCIES.filter((c) => c !== acct.currency).map((c) => `<option value="${c}">${c}</option>`).join('');
+    if (tx && tx.originalCurrency) {
+      $('#fxRow').hidden = false;
+      $('#fxCurrency').value = tx.originalCurrency;
+      $('#amount').value = String(tx.originalAmount / 100);
+      $('#fxNote').textContent = `≈ ${money(tx.amount)} at ${tx.fxRate.toFixed(2)}`;
+    } else {
+      $('#fxRow').hidden = true;
+      $('#amount').value = tx ? String(tx.amount / 100) : '';
+      $('#fxNote').textContent = '';
+    }
     fitAmount();
-    $('#date').value = expense ? expense.date : isoDate(new Date());
-    $('#note').value = expense ? expense.note : '';
+    $('#date').value = tx ? tx.date : isoDate(new Date());
+    $('#note').value = tx ? tx.note : '';
 
     sheet.showModal();
-    if (!expense) $('#amount').focus();
+    if (!tx) $('#amount').focus();
   }
+
+  function updateSheetForType(type) {
+    const isCredit = type === 'credit';
+    $('#catLabel').hidden = isCredit;
+    $('#chips').hidden = isCredit;
+    $('#sheetTitle').textContent = editingId ? 'Edit entry' : (isCredit ? 'New income' : 'New expense');
+  }
+  document.querySelectorAll('#typeToggle input').forEach((r) => r.addEventListener('change', () => updateSheetForType(r.value)));
 
   function closeSheet() { if (sheet.open) sheet.close(); }
 
@@ -446,33 +645,67 @@
   }
   $('#amount').addEventListener('input', fitAmount);
 
+  $('#fxToggle').addEventListener('click', () => {
+    const row = $('#fxRow');
+    row.hidden = !row.hidden;
+    $('#fxNote').textContent = '';
+  });
+
   function showFormError(msg) {
     const el = $('#formError');
     el.textContent = msg;
     el.hidden = false;
   }
 
-  function submitExpense(ev) {
+  async function submitExpense(ev) {
     ev.preventDefault();
-    const amount = parseAmount($('#amount').value);
+    const acct = activeAccount();
+    const type = document.querySelector('#typeToggle input:checked').value;
+    const enteredAmount = parseAmount($('#amount').value);
     const date = $('#date').value;
     const checked = document.querySelector('#chips input:checked');
+    const fxOn = !$('#fxRow').hidden;
+    const fxCurrency = $('#fxCurrency').value;
 
-    if (!Number.isFinite(amount) || amount <= 0) { showFormError('Enter an amount greater than zero.'); $('#amount').focus(); return; }
+    if (!Number.isFinite(enteredAmount) || enteredAmount <= 0) { showFormError('Enter an amount greater than zero.'); $('#amount').focus(); return; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { showFormError('Pick a date.'); return; }
-    if (!checked) { showFormError('Pick a category.'); return; }
+    if (type === 'debit' && !checked) { showFormError('Pick a category.'); return; }
 
-    const fields = { amount, date, category: checked.value, note: $('#note').value.trim() };
-    if (editingId) {
-      const e = state.expenses.find((x) => x.id === editingId);
-      if (e) Object.assign(e, fields);
+    const fields = {
+      type, date, note: $('#note').value.trim(),
+      category: type === 'debit' ? checked.value : '',
+    };
+
+    if (fxOn && fxCurrency !== acct.currency) {
+      const saveBtn = $('#saveBtn');
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Converting…';
+      const result = await fetchFxRate(fxCurrency);
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save';
+      if (!result.ok) { showFormError(result.error); return; }
+      fields.amount = Math.round(enteredAmount * result.rate);
+      fields.originalAmount = enteredAmount;
+      fields.originalCurrency = fxCurrency;
+      fields.fxRate = result.rate;
+      fields.unconverted = false;
     } else {
-      state.expenses.push({ id: uid(), createdAt: Date.now(), ...fields });
+      fields.amount = enteredAmount;
+      fields.originalAmount = undefined;
+      fields.originalCurrency = undefined;
+      fields.fxRate = undefined;
+      fields.unconverted = false;
     }
-    state.settings.lastCategory = fields.category;
+
+    if (editingId) {
+      const t = state.transactions.find((x) => x.id === editingId);
+      if (t) { delete t.originalAmount; delete t.originalCurrency; delete t.fxRate; Object.assign(t, fields); }
+    } else {
+      state.transactions.push({ id: uid(), accountId: acct.id, createdAt: Date.now(), remote: false, ...fields });
+    }
+    if (type === 'debit') state.settings.lastCategory = fields.category;
     save();
 
-    // Jump to the month of the saved expense so it's visible right away.
     const d = parseISO(date);
     ui.year = d.getFullYear();
     ui.month = d.getMonth();
@@ -483,17 +716,102 @@
   }
 
   function deleteExpense(id) {
-    const idx = state.expenses.findIndex((e) => e.id === id);
+    const idx = state.transactions.findIndex((t) => t.id === id);
     if (idx < 0) return;
-    const [removed] = state.expenses.splice(idx, 1);
+    const [removed] = state.transactions.splice(idx, 1);
     save();
     render();
-    toast('Expense deleted', 'Undo', () => {
-      state.expenses.push(removed);
+    toast('Entry deleted', 'Undo', () => {
+      state.transactions.push(removed);
       save();
       render();
     });
   }
+
+  /* ---------- Add / edit account sheet ---------- */
+
+  const accountSheet = $('#accountSheet');
+  let editingAccountId = null;
+
+  function openAccountSheet(account) {
+    editingAccountId = account ? account.id : null;
+    $('#accountSheetTitle').textContent = account ? 'Edit account' : 'New account';
+    $('#acctDeleteBtn').hidden = !account || state.accounts.length < 2;
+    $('#accountFormError').hidden = true;
+
+    let names = null;
+    try { names = new Intl.DisplayNames(undefined, { type: 'currency' }); } catch (e) { /* ignore */ }
+    $('#acctCurrency').innerHTML = currencyOptions(account ? account.currency : guessCurrency(), names);
+
+    $('#acctName').value = account ? account.name : '';
+    $('#acctBalance').value = account ? String(account.startingBalance / 100) : '';
+    $('#acctBalanceDate').value = account ? account.startingDate : isoDate(new Date());
+    $('#acctBudget').value = account && account.budget ? String(account.budget / 100) : '';
+    $('#acctTag').value = account ? account.remoteTag : '';
+
+    accountSheet.showModal();
+    if (!account) $('#acctName').focus();
+  }
+
+  function closeAccountSheet() { if (accountSheet.open) accountSheet.close(); }
+
+  $('#accountForm').addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const name = $('#acctName').value.trim();
+    const errEl = $('#accountFormError');
+    errEl.hidden = true;
+    if (!name) { errEl.textContent = 'Give the account a name.'; errEl.hidden = false; return; }
+
+    const balRaw = $('#acctBalance').value.trim();
+    const balance = balRaw === '' ? 0 : parseAmount(balRaw);
+    if (!Number.isFinite(balance)) { errEl.textContent = 'Enter a valid starting balance.'; errEl.hidden = false; return; }
+
+    const budgetRaw = $('#acctBudget').value.trim();
+    const budget = budgetRaw === '' ? 0 : parseAmount(budgetRaw);
+    if (!Number.isFinite(budget) || budget < 0) { errEl.textContent = 'Enter a valid budget.'; errEl.hidden = false; return; }
+
+    const tag = $('#acctTag').value.trim();
+    if (state.accounts.some((a) => a.id !== editingAccountId && a.remoteTag && a.remoteTag === tag)) {
+      errEl.textContent = 'Another account already uses that sync tag.'; errEl.hidden = false; return;
+    }
+
+    const fields = {
+      name, budget,
+      currency: $('#acctCurrency').value,
+      startingBalance: balance,
+      startingDate: $('#acctBalanceDate').value || isoDate(new Date()),
+      remoteTag: tag,
+    };
+
+    if (editingAccountId) {
+      const a = acctById(editingAccountId);
+      if (a) Object.assign(a, fields);
+    } else {
+      const a = freshAccount(fields);
+      state.accounts.push(a);
+      state.activeAccountId = a.id;
+    }
+    save();
+    closeAccountSheet();
+    render();
+  });
+
+  $('#acctDeleteBtn').addEventListener('click', () => {
+    if (!editingAccountId || state.accounts.length < 2) return;
+    const acct = acctById(editingAccountId);
+    const used = state.transactions.filter((t) => t.accountId === editingAccountId).length;
+    const fallback = state.accounts.find((a) => a.id !== editingAccountId);
+    const msg = used
+      ? `Remove "${acct.name}"? Its ${used} entr${used === 1 ? 'y' : 'ies'} will move to "${fallback.name}".`
+      : `Remove "${acct.name}"?`;
+    if (!confirm(msg)) return;
+    for (const t of state.transactions) if (t.accountId === editingAccountId) t.accountId = fallback.id;
+    state.accounts = state.accounts.filter((a) => a.id !== editingAccountId);
+    if (state.activeAccountId === editingAccountId) state.activeAccountId = fallback.id;
+    save();
+    closeAccountSheet();
+    render();
+  });
 
   /* ---------- Data import / export ---------- */
 
@@ -521,9 +839,10 @@
   }
 
   function exportCSV() {
-    const rows = [['Date', 'Category', 'Amount', 'Note']];
-    for (const e of [...state.expenses].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.createdAt - b.createdAt))) {
-      rows.push([e.date, catById(e.category).name, (e.amount / 100).toFixed(2), e.note]);
+    const rows = [['Account', 'Date', 'Type', 'Category', 'Amount', 'Note']];
+    for (const t of [...state.transactions].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.createdAt - b.createdAt))) {
+      const acct = acctById(t.accountId);
+      rows.push([acct ? acct.name : '', t.date, t.type, t.category ? catById(t.category).name : '', (t.amount / 100).toFixed(2), t.note]);
     }
     const csv = '﻿' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n');
     saveFile(`pennywise-${isoDate(new Date())}.csv`, 'text/csv', csv);
@@ -536,9 +855,9 @@
   async function restoreBackup(file) {
     try {
       const parsed = JSON.parse(await file.text());
-      if (!parsed || !Array.isArray(parsed.expenses)) throw new Error('not a backup');
+      if (!parsed || (!Array.isArray(parsed.transactions) && !Array.isArray(parsed.expenses))) throw new Error('not a backup');
       const next = normalize(parsed);
-      if (!confirm(`Replace your current data with this backup (${next.expenses.length} expenses)?`)) return;
+      if (!confirm(`Replace your current data with this backup (${next.transactions.length} entries, ${next.accounts.length} account(s))?`)) return;
       state = next;
       save();
       render();
@@ -546,6 +865,145 @@
     } catch (e) {
       toast('That file is not a valid Pennywise backup.');
     }
+  }
+
+  /* ---------- SMS sync + live FX (Google Apps Script backend) ---------- */
+
+  async function fetchWithTimeout(url, ms) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms);
+    try { return await fetch(url, { signal: ctrl.signal, cache: 'no-store' }); }
+    finally { clearTimeout(timer); }
+  }
+
+  // Some browsers/deployments block the plain fetch() to an Apps Script URL with a CORS
+  // error even though the endpoint itself is fine. JSONP (a <script> tag) sidesteps CORS
+  // entirely, so it's used as a fallback if the direct fetch fails for any reason.
+  function jsonpFetch(url, ms) {
+    return new Promise((resolve, reject) => {
+      const cbName = `__pwcb${Date.now()}${Math.floor(Math.random() * 1e6)}`;
+      const script = document.createElement('script');
+      const timer = setTimeout(() => { cleanup(); reject(new Error('jsonp timeout')); }, ms);
+      function cleanup() { delete window[cbName]; script.remove(); clearTimeout(timer); }
+      window[cbName] = (data) => { cleanup(); resolve(data); };
+      script.src = `${url}${url.includes('?') ? '&' : '?'}callback=${cbName}`;
+      script.onerror = () => { cleanup(); reject(new Error('jsonp load error')); };
+      document.head.appendChild(script);
+    });
+  }
+
+  async function fetchJson(url, ms) {
+    try {
+      const res = await fetchWithTimeout(url, ms);
+      return await res.json();
+    } catch (err) {
+      return jsonpFetch(url, ms);
+    }
+  }
+
+  /** Live currency conversion for manual entries, via the Apps Script backend (it scrapes
+   * COMBANK's published rate at the moment of the call — see backend/Code.gs.txt). */
+  async function fetchFxRate(fromCurrency) {
+    const { syncUrl, syncSecret } = state.settings;
+    if (!syncUrl || !syncSecret) return { ok: false, error: 'Set up Automatic sync in Settings first — converting currencies needs it.' };
+    try {
+      const sep = syncUrl.includes('?') ? '&' : '?';
+      const url = `${syncUrl}${sep}secret=${encodeURIComponent(syncSecret)}&action=rate&from=${encodeURIComponent(fromCurrency)}`;
+      const data = await fetchJson(url, 15000);
+      if (data && data.ok === true && Number.isFinite(data.rate) && data.rate > 0) return { ok: true, rate: data.rate };
+      return { ok: false, error: (data && data.error) || `${fromCurrency} isn't on COMBANK's rate page.` };
+    } catch (err) {
+      return { ok: false, error: 'Could not reach the rate service. Check your connection.' };
+    }
+  }
+
+  let syncing = false;
+
+  /** Pulls new rows from the Apps Script sheet, routes each to the local account whose
+   * Sync tag matches, and adds it as a debit or credit transaction. */
+  async function syncNow(manual) {
+    const { syncUrl, syncSecret } = state.settings;
+    if (!syncUrl || !syncSecret) {
+      if (manual) toast('Add a Sync URL and secret first.');
+      return;
+    }
+    if (syncing) return;
+    syncing = true;
+    if (manual) toast('Syncing…');
+
+    try {
+      const sep = syncUrl.includes('?') ? '&' : '?';
+      const url = `${syncUrl}${sep}secret=${encodeURIComponent(syncSecret)}&since=${state.settings.syncCursor}`;
+      const data = await fetchJson(url, 20000);
+      if (!data || data.ok !== true || !Array.isArray(data.rows)) throw new Error((data && data.error) || 'bad response');
+
+      let added = 0;
+      let unmatched = 0;
+      const cancelled = [];
+
+      for (const row of [...data.rows].sort((a, b) => Number(a.id) - Number(b.id))) {
+        const rowId = Number(row.id);
+        if (!Number.isFinite(rowId)) continue;
+        state.settings.syncCursor = Math.max(state.settings.syncCursor, rowId);
+
+        if (row.type === 'cancelled') { cancelled.push(row.merchant || row.raw || 'a transaction'); continue; }
+        if (row.type !== 'debit' && row.type !== 'credit') continue;
+
+        const account = state.accounts.find((a) => (a.remoteTag || '') === (row.account || ''));
+        if (!account) { unmatched++; continue; }
+
+        const rawAmount = Math.round(Number(row.amount) * 100);
+        if (!Number.isFinite(rawAmount) || rawAmount <= 0) continue;
+
+        const id = `remote:${rowId}`;
+        if (state.transactions.some((x) => x.id === id)) continue;
+
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(row.date) ? row.date : isoDate(new Date());
+        const hasConverted = Number.isFinite(row.convertedAmount) && row.convertedAmount > 0;
+        const currency = row.currency || account.currency;
+        const unconverted = currency !== account.currency && !hasConverted;
+        const amount = hasConverted ? Math.round(row.convertedAmount * 100) : rawAmount;
+
+        const tx = {
+          id, accountId: account.id, createdAt: Date.now(), remote: true,
+          type: row.type, amount, date,
+          note: String(row.merchant || row.raw || '').slice(0, 200),
+          category: row.type === 'debit' ? guessCategory(`${row.merchant || ''} ${row.raw || ''}`) : '',
+          unconverted,
+        };
+        if (currency !== account.currency) {
+          tx.originalAmount = rawAmount;
+          tx.originalCurrency = currency;
+          if (Number.isFinite(row.fxRate) && row.fxRate > 0) tx.fxRate = row.fxRate;
+        }
+        state.transactions.push(tx);
+        added++;
+      }
+
+      state.settings.syncLastAt = Date.now();
+      save();
+      if (added || unmatched || cancelled.length) render(); else if (ui.tab === 'settings') renderSettings();
+
+      if (cancelled.length) {
+        toast(`⚠ COMBANK reported ${cancelled.length} cancelled transaction${cancelled.length === 1 ? '' : 's'} (${cancelled[0]}) — check for a matching entry to remove.`);
+      } else if (unmatched) {
+        toast(`${unmatched} synced transaction${unmatched === 1 ? '' : 's'} had no matching account — check Sync tags in Settings.`);
+      } else if (added) {
+        toast(`Synced ${added} new entr${added === 1 ? 'y' : 'ies'} from SMS`);
+      } else if (manual) {
+        toast('Up to date — no new transactions.');
+      }
+    } catch (err) {
+      if (manual) toast('Could not sync. Check the Sync URL and secret, then try again.');
+    } finally {
+      syncing = false;
+    }
+  }
+
+  function maybeAutoSync() {
+    if (!state.settings.syncUrl || !state.settings.syncSecret) return;
+    if (Date.now() - (state.settings.syncLastAt || 0) < 30000) return; // avoid hammering on rapid foreground/background
+    syncNow(false);
   }
 
   /* ---------- Events ---------- */
@@ -566,6 +1024,14 @@
     render();
   });
 
+  $('#accountBar').addEventListener('click', (ev) => {
+    if (ev.target.closest('[data-add-account]')) { openAccountSheet(null); return; }
+    const pill = ev.target.closest('.acct-pill[data-id]');
+    if (!pill) return;
+    state.activeAccountId = pill.dataset.id;
+    render();
+  });
+
   document.querySelector('.tabbar').addEventListener('click', (ev) => {
     const tab = ev.target.closest('.tab');
     if (!tab) return;
@@ -578,8 +1044,8 @@
 
   $('#entries').addEventListener('click', (ev) => {
     const row = ev.target.closest('.row');
-    const expense = row && state.expenses.find((e) => e.id === row.dataset.id);
-    if (expense) openSheet(expense);
+    const tx = row && state.transactions.find((t) => t.id === row.dataset.id);
+    if (tx) openSheet(tx);
   });
 
   $('#search').addEventListener('input', (ev) => { ui.query = ev.target.value; renderList(); });
@@ -601,24 +1067,27 @@
   });
   sheet.addEventListener('click', (ev) => { if (ev.target === sheet) closeSheet(); });
 
+  $('#accountSheetClose').addEventListener('click', closeAccountSheet);
+  accountSheet.addEventListener('click', (ev) => { if (ev.target === accountSheet) closeAccountSheet(); });
+
   const settingsView = $('#view-settings');
 
   settingsView.addEventListener('change', (ev) => {
-    if (ev.target.id === 'currency') {
-      state.settings.currency = ev.target.value;
-      save();
-      render();
-    } else if (ev.target.id === 'budget') {
-      const raw = ev.target.value.trim();
-      const cents = raw === '' ? 0 : parseAmount(raw);
-      if (!Number.isFinite(cents) || cents < 0) { toast('Enter a valid budget amount.'); render(); return; }
-      state.settings.budget = cents;
-      save();
-      render();
-    } else if (ev.target.id === 'restore') {
+    if (ev.target.id === 'restore') {
       const file = ev.target.files[0];
       ev.target.value = '';
       if (file) restoreBackup(file);
+    } else if (ev.target.id === 'syncUrl') {
+      const value = ev.target.value.trim();
+      if (value && !/^https:\/\//i.test(value)) { toast('The Sync URL should start with https://'); render(); return; }
+      if (value !== state.settings.syncUrl) { state.settings.syncCursor = 0; state.settings.syncLastAt = 0; }
+      state.settings.syncUrl = value;
+      save();
+      render();
+    } else if (ev.target.id === 'syncSecret') {
+      state.settings.syncSecret = ev.target.value.trim();
+      save();
+      render();
     }
   });
 
@@ -641,16 +1110,20 @@
   });
 
   settingsView.addEventListener('click', (ev) => {
+    const editAcct = ev.target.closest('[data-edit-account]');
+    if (editAcct) { openAccountSheet(acctById(editAcct.dataset.editAccount)); return; }
+    if (ev.target.closest('[data-add-account]')) { openAccountSheet(null); return; }
+
     const remove = ev.target.closest('[data-remove-cat]');
     if (remove) {
       const id = remove.dataset.removeCat;
       const cat = catById(id);
-      const used = state.expenses.filter((e) => e.category === id).length;
+      const used = state.transactions.filter((t) => t.category === id).length;
       const msg = used
-        ? `Remove "${cat.name}"? Its ${used} expense${used === 1 ? '' : 's'} will move to "Other".`
+        ? `Remove "${cat.name}"? Its ${used} entr${used === 1 ? 'y' : 'ies'} will move to "Other".`
         : `Remove "${cat.name}"?`;
       if (!confirm(msg)) return;
-      for (const e of state.expenses) if (e.category === id) e.category = 'other';
+      for (const t of state.transactions) if (t.category === id) t.category = 'other';
       state.settings.categories = state.settings.categories.filter((c) => c.id !== id);
       if (state.settings.lastCategory === id) state.settings.lastCategory = 'other';
       save();
@@ -662,19 +1135,24 @@
     if (!act) return;
     if (act.dataset.act === 'csv') exportCSV();
     else if (act.dataset.act === 'backup') exportBackup();
+    else if (act.dataset.act === 'sync') syncNow(true);
     else if (act.dataset.act === 'erase') {
-      if (!state.expenses.length) { toast('There is nothing to erase.'); return; }
-      if (!confirm(`Permanently delete all ${state.expenses.length} expenses? This cannot be undone.`)) return;
-      state.expenses = [];
+      if (!state.transactions.length) { toast('There is nothing to erase.'); return; }
+      if (!confirm(`Permanently delete all ${state.transactions.length} entries across every account? This cannot be undone.`)) return;
+      state.transactions = [];
       save();
       render();
-      toast('All expenses erased');
+      toast('All data erased');
     }
   });
 
   /* ---------- Start ---------- */
 
   render();
+  maybeAutoSync();
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') maybeAutoSync();
+  });
 
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
