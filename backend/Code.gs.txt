@@ -1,5 +1,5 @@
 /**
- * Pennywise sync backend — v2 (multi-account + live FX conversion).
+ * Pennywise sync backend — v3 (one Shortcut for every bank + live FX conversion).
  *
  * This is NOT a file you run locally — it's Google Apps Script code you paste into
  * a script bound to a Google Sheet. Google hosts and runs it for free, and it acts as
@@ -30,6 +30,18 @@
  * (Deploy → Manage deployments → edit (pencil) → Version: New version → Deploy)
  * for the changes to take effect — saving alone does not update the live URL.
  *
+ * ─── What the Shortcut sends ──────────────────────────────────────────────────
+ * The single "Send bank SMS to Pennywise" Shortcut (see README.md) POSTs the raw text:
+ *   { "secret": "...", "message": "<the SMS>", "sender": "<who sent it>" }
+ * This script works out which bank it's from and reads the amount, direction, merchant
+ * and date itself (see parseSms_ below), so the Shortcut needs no regexes. A message
+ * that isn't a recognised bank transaction is never stored as a transaction:
+ *   - one from a known bank sender in a shape this script doesn't read yet is copied to a
+ *     second tab, "Unrecognised", so support for it can be added later;
+ *   - anything else is dropped without being saved anywhere.
+ * The older per-bank Shortcuts that POST already-parsed fields (account, type, amount, ...)
+ * still work unchanged.
+ *
  * ─── What it stores ────────────────────────────────────────────────────────────
  * Every transaction is appended as a row in the sheet, so the sheet itself doubles
  * as a human-readable backup you can open any time:
@@ -40,9 +52,8 @@
  * still computes each account's balance from its starting balance + synced transactions,
  * so the two are a useful cross-check against each other rather than the same number.
  *
- * `account` is a free-text tag (e.g. "combank", "ntb") that must match a Pennywise
- * account's Sync tag (set when you add/edit an account in Settings) so incoming rows
- * land in the right ledger. `type` is "debit", "credit", or "cancelled" (logged for
+ * `account` is the bank's id ("combank", "ntb"). Pennywise puts each row in the account
+ * whose bank (chosen when adding the account) has that id, or whose older Sync tag matches. `type` is "debit", "credit", or "cancelled" (logged for
  * your own reference, never auto-added as a transaction — see the README).
  *
  * ─── Currency conversion ───────────────────────────────────────────────────────
@@ -73,8 +84,18 @@ function doPost(e) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
-    const body = JSON.parse(e.postData.contents);
+    let body = JSON.parse(e.postData.contents);
     if (body.secret !== SECRET) return json_({ ok: false, error: 'bad secret' });
+
+    if (typeof body.message === 'string') {
+      const parsed = parseSms_(body.message, String(body.sender || ''));
+      if (!parsed) return json_({ ok: true, skipped: 'not a bank message' });
+      if (parsed.unrecognised) {
+        unrecognisedSheet_().appendRow([new Date(), parsed.bank, String(body.sender || ''), body.message]);
+        return json_({ ok: true, skipped: 'bank message in an unrecognised format' });
+      }
+      body = Object.assign(parsed, { raw: body.message });
+    }
 
     const amount = Number(body.amount);
     if (!isFinite(amount) || amount <= 0) return json_({ ok: false, error: 'bad amount' });
@@ -131,7 +152,75 @@ function doGet(e) {
   return json_(obj);
 }
 
+// ---------- SMS parsing ----------
+
+/** Which bank a message is from: by sender first, then by its wording. */
+function bankOf_(text, sender) {
+  const from = sender.replace(/\s+/g, '').toUpperCase();
+  if (from.indexOf('NATIONS') !== -1 || from === 'NTB') return 'ntb';
+  if (from.indexOf('COMBANK') !== -1 || from.indexOf('COMMERCIAL') !== -1) return 'combank';
+  if (/was performed on your Account No/i.test(text)) return 'ntb';
+  if (/Purchase at .+ for [A-Z]{3}|Credit for Rs\.|ON YOUR CARD ENDING/i.test(text)) return 'combank';
+  return '';
+}
+
+const num_ = (s) => Number(String(s).replace(/,/g, ''));
+
+/**
+ * Reads one SMS into { account, type, amount, currency, merchant, date, balance }.
+ * Returns null for a message that isn't from a known bank (or is one to ignore), or
+ * { unrecognised, bank } for a bank message in a shape this doesn't read yet.
+ */
+function parseSms_(message, sender) {
+  const text = String(message).replace(/\s+/g, ' ').trim();
+  const bank = bankOf_(text, sender);
+  if (!bank) return null;
+  let m;
+
+  if (bank === 'ntb') {
+    // NTB's online-banking confirmation repeats the separate "was performed ... DR" alert: skip it.
+    if (/successfully transferred/i.test(text)) return null;
+    // "<what> was performed on your Account No. 2005xxxx9353 for LKR 7000.00 DR. Current Bal LKR 4296.57 ..."
+    // DR/CR and the balance are sometimes missing (interest and tax postings).
+    m = text.match(/^(.*?)\s*was performed on your Account No\.?\s*\S+\s+for\s+([A-Z]{3})\s*([\d,]+(?:\.\d+)?)\s*(DR|CR)?\b\.?(?:\s*Current Bal\s+[A-Z]{3}\s*([\d,]+(?:\.\d+)?))?/i);
+    if (!m) return { unrecognised: true, bank: bank };
+    const what = m[1].replace(/^\w*X+\w*:/i, '').trim(); // drop a leading "2005XXXXX353:"
+    let type;
+    if (m[4]) type = m[4].toUpperCase() === 'CR' ? 'credit' : 'debit';
+    else type = /\bInt\.?\s*Pd\b/i.test(what) ? 'credit' : 'debit';
+    let merchant = what;
+    if (/\bInt\.?\s*Pd\b/i.test(what)) merchant = 'Interest';
+    else if (/\bW\.?\s*Tax\b/i.test(what)) merchant = 'Withholding tax';
+    return { account: bank, type: type, amount: num_(m[3]), currency: m[2].toUpperCase(), merchant: merchant, date: '', balance: m[5] ? num_(m[5]) : '' };
+  }
+
+  // COMBANK
+  m = text.match(/Purchase at (.+?) for ([A-Z]{3}) ([\d,]+(?:\.\d+)?) on (\d{2})\/(\d{2})\/(\d{2})/i);
+  if (m) {
+    return { account: bank, type: 'debit', amount: num_(m[3]), currency: m[2].toUpperCase(), merchant: m[1].trim(), date: `20${m[6]}-${m[5]}-${m[4]}`, balance: '' };
+  }
+  m = text.match(/Credit for Rs\.?\s*([\d,]+(?:\.\d+)?)(?:.*?\bat \d{1,2}:\d{2} at (.+?)\.?$)?/i);
+  if (m) {
+    return { account: bank, type: 'credit', amount: num_(m[1]), currency: 'LKR', merchant: m[2] ? m[2].trim() : '', date: '', balance: '' };
+  }
+  m = text.match(/TRANSACTION AT (.+?) ON YOUR CARD.*CANCELLED/i);
+  if (m) {
+    return { account: bank, type: 'cancelled', amount: 1, currency: 'LKR', merchant: m[1].trim(), date: '', balance: '' };
+  }
+  return { unrecognised: true, bank: bank };
+}
+
 // ---------- Sheet helpers ----------
+
+function unrecognisedSheet_() {
+  const book = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = book.getSheetByName('Unrecognised');
+  if (!sheet) {
+    sheet = book.insertSheet('Unrecognised', book.getSheets().length); // keep the transactions tab first
+    sheet.appendRow(['receivedAt', 'bank', 'sender', 'message']);
+  }
+  return sheet;
+}
 
 function mainSheet_() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];

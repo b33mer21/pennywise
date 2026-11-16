@@ -666,7 +666,7 @@
         <button type="button" class="btn" data-act="sync">Sync now</button>
       </div>
       <p class="note">${syncStatusText(s)}
-        Each account's Sync tag (edit an account above) must match the "account" value its iOS Shortcut sends.</p>
+        Synced Commercial Bank and NTB messages go to the account you set to that bank.</p>
 
       <h2 class="section-title">Your data</h2>
       <div class="card btn-stack">
@@ -1107,6 +1107,7 @@
 
       let added = 0;
       let unmatched = 0;
+      const unmatchedBanks = new Set();
       const cancelled = [];
 
       for (const row of [...data.rows].sort((a, b) => Number(a.id) - Number(b.id))) {
@@ -1117,8 +1118,10 @@
         if (row.type === 'cancelled') { cancelled.push(row.merchant || row.raw || 'a transaction'); continue; }
         if (row.type !== 'debit' && row.type !== 'credit') continue;
 
-        const account = state.accounts.find((a) => (a.remoteTag || '') === (row.account || ''));
-        if (!account) { unmatched++; continue; }
+        // Rows name a bank ("combank", "ntb"): use an account with that Sync tag, else one set to that bank.
+        const tag = String(row.account || '');
+        const account = (tag && state.accounts.find((a) => a.remoteTag === tag)) || (tag && state.accounts.find((a) => a.bankId === tag));
+        if (!account) { unmatched++; unmatchedBanks.add(bankById(tag) ? bankById(tag).short : tag || 'unknown'); continue; }
 
         const rawAmount = Math.round(Number(row.amount) * 100);
         if (!Number.isFinite(rawAmount) || rawAmount <= 0) continue;
@@ -1155,7 +1158,7 @@
       if (cancelled.length) {
         toast(`⚠ COMBANK reported ${cancelled.length} cancelled transaction${cancelled.length === 1 ? '' : 's'} (${cancelled[0]}) — check for a matching entry to remove.`);
       } else if (unmatched) {
-        toast(`${unmatched} synced transaction${unmatched === 1 ? '' : 's'} had no matching account — check Sync tags in Settings.`);
+        toast(`Skipped ${unmatched} synced transaction${unmatched === 1 ? '' : 's'} from ${[...unmatchedBanks].join(', ')}: add an account for that bank first.`);
       } else if (added) {
         toast(`Synced ${added} new entr${added === 1 ? 'y' : 'ies'} from SMS`);
       } else if (manual) {
