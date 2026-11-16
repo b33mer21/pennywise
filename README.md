@@ -72,7 +72,7 @@ This is the same idea as apps like Kiwi Money (one automation that hands every m
 the app, which picks out the bank ones). The difference is that a native app can receive the
 message directly on the phone, while a web app needs the Google Sheet in between.
 
-Supported so far: **Commercial Bank** (card purchases, credits, cancellations) and **NTB**
+Supported so far: **Commercial Bank** (card purchases, ATM withdrawals, credits, cash deposits, cancellations) and **NTB**
 (every "was performed on your Account" alert, including interest and withholding tax). A bank
 message the script can't read yet is kept in the Sheet's **Unrecognised** tab so support can
 be added later; it never becomes a transaction.
@@ -111,7 +111,7 @@ will be logged twice.
      Run** if shown. Tap **Next** → **New Blank Automation**.
 2. Add **Match Text**. Set its text to **Shortcut Input** (the message), and the pattern to:
    ```
-   (?i)was performed on your Account|Purchase at .+ for [A-Z]{3}|Credit for Rs\.|ON YOUR CARD ENDING
+   (?i)was performed on your Account|(Purchase|Withdrawal) at .+ for [A-Z]{3}|Credit for Rs\.|Deposit at .+ for Rs\.|ON YOUR CARD ENDING
    ```
    This is the privacy filter: only bank transaction alerts match.
 3. Add **If** → **Matches** → **has any value**.
