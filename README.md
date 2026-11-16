@@ -11,17 +11,16 @@ All data stays on the device (browser storage).
 
 **On your iPhone:** open the live app link above in **Safari** → **Share** → **Add to Home Screen**.
 It then opens full-screen like a native app and works offline. Everything below this point (the SMS
-sync backend, the two Shortcuts, and the widget) is what's left to set up on the phone.
+sync backend, the one SMS automation, and the widget) is what's left to set up on the phone.
 
 ### Checklist, in order
 
 1. Add to Home Screen (above) — 1 minute.
 2. [Deploy the free backend](#1-deploy-the-free-backend-one-time-5-minutes) — a Google Sheet + Apps Script, ~5 minutes.
 3. Paste the resulting URL + secret into Pennywise → Settings → **Automatic sync**.
-4. [Set each account's Sync tag](#2-set-each-accounts-sync-tag) (`combank` / `ntb`).
-5. [Build the COMBANK Shortcut](#3-build-the-combank-shortcut-one-time).
-6. [Build the NTB Shortcut](#4-build-the-ntb-shortcut).
-7. [Set up the home-screen widget](#home-screen-widget-balance--monthly-spend) (optional).
+4. [Set each account's bank](#2-set-each-accounts-bank) (Commercial Bank / NTB).
+5. [Build the one SMS automation](#3-build-the-sms-automation-one-time).
+6. [Set up the home-screen widget](#home-screen-widget-balance--monthly-spend) (optional).
 
 <details>
 <summary>Deploying from scratch (for reference — not needed, yours is already live)</summary>
@@ -60,16 +59,23 @@ Netlify Drop (app.netlify.com/drop) also works: drag the folder in and claim the
 
 ## Auto-logging bank SMS as transactions
 
-**How it works:** a bank SMS arrives (COMBANK, NTB, or any bank) → an iOS Shortcut
-automation (silent, no tap) parses it and posts it to a free Google Sheet, tagged with
-which bank it came from → Pennywise pulls in anything new the next time you open the app,
-routing each transaction to the matching account. The capture itself is instant and silent;
-Pennywise catching up happens on next open, because an iPhone home-screen web app isn't
-allowed to run in the background — nothing free or paid changes that on iOS.
+**How it works:** one iOS automation runs silently on every text you receive. It checks the
+text on your phone, and only if it looks like a Commercial Bank or NTB transaction alert does
+it send the message and its sender to a free Google Sheet. Everything else (personal texts,
+OTP codes) never leaves your phone. The Sheet's script reads the alert (which bank, amount,
+money in or out, merchant), and Pennywise pulls in anything new the next time you open it,
+putting each transaction in the account set to that bank. The capture itself is instant and
+silent; Pennywise catching up happens on next open, because an iPhone home-screen web app
+isn't allowed to run in the background — nothing free or paid changes that on iOS.
 
-One Google Sheet + one Apps Script deployment handles **every account** — each Shortcut
-just tags its posts with an account name (`combank`, `ntb`, ...) that you set once per
-account in Pennywise (Settings → Accounts → Edit → **Sync tag**).
+This is the same idea as apps like Kiwi Money (one automation that hands every message to
+the app, which picks out the bank ones). The difference is that a native app can receive the
+message directly on the phone, while a web app needs the Google Sheet in between.
+
+Supported so far: **Commercial Bank** (card purchases, ATM withdrawals, credits, cash deposits, cancellations) and **NTB**
+(every "was performed on your Account" alert, including interest and withholding tax). A bank
+message the script can't read yet is kept in the Sheet's **Unrecognised** tab so support can
+be added later; it never becomes a transaction.
 
 ### 1. Deploy the free backend (one-time, ~5 minutes)
 
@@ -81,112 +87,47 @@ and deploy it as a Web App. You'll end up with two values:
 
 Paste both into Pennywise → Settings → **Automatic sync**.
 
-### 2. Set each account's Sync tag
+**Already deployed an older version?** Open the script (Extensions → Apps Script from the
+Sheet), replace everything **except your own `SECRET` line** with the new code, save, then
+**Deploy → Manage deployments → pencil → Version: New version → Deploy**. The URL and secret
+stay the same, so nothing changes in Pennywise.
 
-> **Paused:** the Sync tag field has been taken out of the account form while automatic
-> sync is switched off. Existing tags are kept, so `combank` and `ntb` still route correctly.
+### 2. Set each account's bank
 
-Settings → tap **Edit** on an account → **Sync tag** → e.g. `combank` for your Commercial
-Bank account, `ntb` for Nations Trust Bank. This has to exactly match the `account` value
-the Shortcut below sends, or synced transactions won't know where to go (they'll still be
-logged in the Sheet, and Pennywise will warn you when a tag doesn't match anything).
+Settings (the gear on Home) → tap **Edit** on an account → **Bank** → choose **Commercial
+Bank of Ceylon** or **Nations Trust Bank** → **Save**. Accounts that had the old `combank` /
+`ntb` Sync tags were linked automatically, so check rather than redo.
 
-### 3. Build the COMBANK Shortcut (one-time)
+### 3. Build the SMS automation (one-time)
 
-This is written from your actual SMS screenshots, so the regex matches real messages like:
+If you built the older **Log COMBANK SMS** / **Log NTB SMS** automations, **turn them off or
+delete them first** (Shortcuts → Automation → swipe left → Delete), or every transaction
+will be logged twice.
 
-> *Dear Cardholder, Purchase at UBER 852 LK for LKR 350.00 on 18/09/26 01:03 PM has been
-> authorised on your debit card ending #7326.*
-> *Credit for Rs. 590.00 to 8013822855 at 19:53 at DIGITAL BANKING DIVISION*
-> *YOUR TRANSACTION AT UBER ON YOUR CARD ENDING WITH 7326 HAS BEEN CANCELLED.*
+1. **Shortcuts app → Automation → + → Message.**
+   - **Message Contains:** type the single letter `a` (every bank alert contains one; this
+     is how the automation catches all messages). Leave the sender as **Any Sender**.
+   - Choose **Run Immediately** (not "Run After Confirmation"), and turn off **Notify When
+     Run** if shown. Tap **Next** → **New Blank Automation**.
+2. Add **Match Text**. Set its text to **Shortcut Input** (the message), and the pattern to:
+   ```
+   (?i)was performed on your Account|(Purchase|Withdrawal) at .+ for [A-Z]{3}|Credit for Rs\.|Deposit at .+ for Rs\.|ON YOUR CARD ENDING
+   ```
+   This is the privacy filter: only bank transaction alerts match.
+3. Add **If** → **Matches** → **has any value**.
+4. Inside the If, add **Get Contents of URL**:
+   - URL: your Apps Script Web app URL (ends in `/exec`).
+   - Tap **Show More** → Method **POST** → Request Body **JSON**, and add three **Text** fields:
+     - `secret` → your secret
+     - `message` → **Shortcut Input**
+     - `sender` → **Sender**
+5. Leave **Otherwise** empty, then tap **Done**.
 
-1. **Shortcuts app → Automation → + → Create Personal Automation → Message.**
-   Choose **Any Contact**, turn on **Message Contains**, type `COMBANK`. If COMBANK's
-   sender shows up as a selectable contact instead, pick that — it's a cleaner filter than
-   text-matching.
-2. Turn **off** "Ask Before Running" (also shown as "Notify When Run") so it fires silently.
-3. **Add Action**, name the shortcut **"Log COMBANK SMS"**, and build:
-   1. **Match Text** — Text: `Shortcut Input`. Regular Expression:
-      ```
-      (Purchase at|Credit for Rs\.|CANCELLED)
-      ```
-      This just detects which of the three message shapes it is; the branches below
-      re-match with a shape-specific pattern to pull out the real fields.
-   2. **If** `Matches has any value` → otherwise **Stop This Shortcut**.
-   3. Inside the If, branch again on which keyword matched (three **If** blocks, or one
-      with "Or" conditions per branch):
+To test, wait for a real bank alert (or forward one to yourself from another phone): a new row
+should appear in the Sheet within a few seconds. Then open Pennywise, or Settings → **Sync now**.
 
-      **A. Purchase (debit):** Match Text again with
-      ```
-      Purchase at (.+?) for ([A-Z]{3}) ([\d,]+\.\d{2}) on (\d{2})/(\d{2})/(\d{2})
-      ```
-      Groups: 1 = merchant, 2 = currency, 3 = amount, 4/5/6 = day/month/year.
-      - **Replace Text**: strip commas from Group 3 → `amount`.
-      - **Text**: build the date as `20{Group 6}-{Group 5}-{Group 4}` (e.g. `2026-09-18`).
-      - **Dictionary**: `secret`, `account`:`combank`, `type`:`debit`, `amount` (Number),
-        `currency`: Group 2, `merchant`: Group 1, `date`, `raw`: `Shortcut Input`.
-      - **Get Contents of URL** → your Apps Script URL, POST, JSON body = the Dictionary.
-
-      **B. Credit:** Match Text again with
-      ```
-      Credit for Rs\. ([\d,]+\.\d{2})
-      ```
-      - Strip commas from Group 1 → `amount`.
-      - **Dictionary**: `secret`, `account`:`combank`, `type`:`credit`, `amount` (Number),
-        `currency`:`LKR`, `merchant`:*(leave blank)*, `date`:*(leave blank — the backend
-        fills in today)*, `raw`: `Shortcut Input`.
-      - **Get Contents of URL**, same as above.
-
-      **C. Cancelled:** Match Text again with `AT (.+?) ON YOUR CARD` to grab the merchant.
-      - **Dictionary**: `secret`, `account`:`combank`, `type`:`cancelled`, `amount`:`1`
-        *(required by the backend but unused for this type)*, `merchant`: the match,
-        `raw`: `Shortcut Input`.
-      - **Get Contents of URL**, same as above.
-4. Send yourself a test text containing one of the three phrases to confirm it reaches
-   the Sheet (open the Sheet — a new row should appear within a few seconds), then open
-   Pennywise and tap Settings → **Sync now**.
-
-I built this from your screenshots but have no device to test the Shortcut itself on, so
-**if a step doesn't match what you see, tell me and I'll adjust it.**
-
-### 4. Build the NTB Shortcut
-
-Good news — NTB's SMS are one consistent template for every transaction type, so this
-Shortcut is simpler than COMBANK's. From your screenshots:
-
-> *ONLINE FUND TRF VIA CEFTS was performed on your Account No. 2005xxxx9353 for LKR
-> 55000.00 CR. Current Bal LKR 61196.57 Call 0114711411 for any inquiry.*
-> *Other Bank Transfer (CEFTS) was performed on your Account No. 2005xxxx9353 for LKR
-> 21800.00 DR. Current Bal LKR 39396.57 Call 0114711411 for any inquiry.*
-
-(`CR` = money in, `DR` = money out — a single regex reads both cases directly, and it
-already correctly ignores NTB's separate "Funds successfully transferred!" confirmation
-message, since that one doesn't match the pattern and would otherwise double-count the
-same transfer. I checked this against your exact messages before writing it, not just in theory.)
-
-1. **Shortcuts app → Automation → + → Create Personal Automation → Message.**
-   Choose **Any Contact**, turn on **Message Contains**, type `was performed on your Account`.
-   If "NationsSMS" shows up as a selectable contact instead, pick that.
-2. Turn **off** "Ask Before Running" so it fires silently.
-3. **Add Action**, name the shortcut **"Log NTB SMS"**, and build:
-   1. **Match Text** — Text: `Shortcut Input`. Regular Expression:
-      ```
-      (.+?) was performed on your Account No\. \S+ for LKR ([\d,]+\.\d{2}) (CR|DR)\. Current Bal LKR ([\d,]+\.\d{2})
-      ```
-      Groups: 1 = description, 2 = amount, 3 = `CR`/`DR`, 4 = current balance.
-   2. **If** `Matches has any value` → otherwise **Stop This Shortcut**.
-   3. **Replace Text**: strip commas from Group 2 → `amount`. Do the same for Group 4 → `balance`.
-   4. **If** Group 3 is `CR` → set variable `type` to `credit`; **Otherwise** set it to `debit`.
-   5. **Dictionary**: `secret`, `account`:`ntb`, `type` (the variable), `amount` (Number),
-      `currency`:`LKR`, `merchant`: Group 1, `date`:*(leave blank)*, `raw`: `Shortcut Input`,
-      `balance` (Number): the `balance` variable — this last one is optional; it's just
-      logged in the Sheet so you can eyeball it against what Pennywise computes, it doesn't
-      feed into the app directly.
-   6. **Get Contents of URL** → your Apps Script `/exec` URL, POST, JSON body = the Dictionary.
-4. Send yourself a test text or wait for a real one, check the Sheet for a new row, then
-   Pennywise → Settings → **Sync now**. I ran this exact regex against your three real
-   message samples and it matched every one correctly with the right amount and direction,
-   so this should work as-is — tell me if anything doesn't land right.
+I wrote this without an iPhone to try it on, and Shortcuts' wording shifts between iOS
+versions, so **if a step doesn't match what you see, send a screenshot** and I'll adjust it.
 
 ### Currency conversion (COMBANK-only, approximate)
 
