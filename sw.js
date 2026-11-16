@@ -1,6 +1,6 @@
 // Offline support: serve the app shell from cache, refresh it in the background.
 // Bump CACHE when you want every device to drop old files.
-const CACHE = 'pennywise-v10';
+const CACHE = 'pennywise-v11';
 const ASSETS = [
   './',
   './index.html',

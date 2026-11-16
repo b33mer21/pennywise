@@ -1208,7 +1208,7 @@
     if (!tab) return;
     ui.tab = tab.dataset.tab;
     render();
-    window.scrollTo(0, 0);
+    $('main').scrollTop = 0;
   });
 
   $('#fab').addEventListener('click', () => openSheet());
@@ -1227,8 +1227,8 @@
     renderStats();
   });
 
-  $('#settingsBtn').addEventListener('click', () => { ui.tab = 'settings'; render(); window.scrollTo(0, 0); });
-  $('#backBtn').addEventListener('click', () => { ui.tab = 'home'; render(); window.scrollTo(0, 0); });
+  $('#settingsBtn').addEventListener('click', () => { ui.tab = 'settings'; render(); $('main').scrollTop = 0; });
+  $('#backBtn').addEventListener('click', () => { ui.tab = 'home'; render(); $('main').scrollTop = 0; });
 
   $('#view-home').addEventListener('click', (ev) => {
     if (ev.target.closest('[data-add-account]')) { openAccountSheet(null); return; }
@@ -1237,7 +1237,7 @@
     state.activeAccountId = card.dataset.openAccount;
     ui.tab = 'list';
     render();
-    window.scrollTo(0, 0);
+    $('main').scrollTop = 0;
   });
 
   $('#view-stats').addEventListener('click', (ev) => {

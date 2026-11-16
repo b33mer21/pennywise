@@ -37,16 +37,20 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
 
-html { background: var(--bg); }
+/* The page itself never scrolls: only <main> does. iOS lets fixed/sticky bars drift when the
+   whole document scrolls in a home-screen app, so the top and tab bars sit in a fixed-height
+   column instead. */
+html { background: var(--bg); height: 100%; overflow: hidden; }
 body {
-  margin: 0;
+  margin: 0; height: 100%; overflow: hidden;
   background: var(--bg);
   color: var(--text);
   font: 16px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   -webkit-text-size-adjust: 100%;
   overscroll-behavior-y: none;
 }
-body:has(dialog[open]) { overflow: hidden; }
+#app { height: 100%; height: 100dvh; display: flex; flex-direction: column; }
+body:has(dialog[open]) main { overflow: hidden; }
 
 button, input, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
@@ -56,8 +60,8 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 
 /* ---------- Top bar ---------- */
 .topbar {
-  position: sticky;
-  top: 0;
+  flex: none;
+  position: relative;
   z-index: 10;
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   -webkit-backdrop-filter: blur(14px);
@@ -94,7 +98,10 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .acct-pill.add { color: var(--accent); }
 
 /* ---------- Layout ---------- */
-main { max-width: 640px; margin: 0 auto; padding: 4px 16px calc(var(--tabbar-h) + 110px + env(safe-area-inset-bottom)); }
+main {
+  flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain;
+  padding: 4px max(16px, calc(50% - 304px)) 96px;
+}
 .view > * + * { margin-top: 14px; }
 
 .card {
@@ -267,7 +274,7 @@ h2.section-title {
 .fab:active { transform: scale(.96); }
 
 .tabbar {
-  position: fixed; z-index: 15; left: 0; right: 0; bottom: 0;
+  flex: none; position: relative; z-index: 15;
   background: var(--surface); border-top: 1px solid var(--border);
   padding-bottom: env(safe-area-inset-bottom);
 }
@@ -295,12 +302,19 @@ dialog#sheet, dialog#accountSheet {
   margin: auto 0 0 0; width: 100%; max-width: none; max-height: 92dvh; overflow: auto;
   border: 0; padding: 0; border-radius: 22px 22px 0 0;
   background: var(--surface); color: var(--text);
+  overscroll-behavior: contain;
   animation: slide-up .22s ease-out;
+}
+/* Adding or editing an account takes over the whole screen. */
+dialog#accountSheet {
+  margin: 0; height: 100%; max-height: none; border-radius: 0;
+  padding-top: env(safe-area-inset-top);
 }
 dialog#sheet::backdrop, dialog#accountSheet::backdrop { background: rgba(0, 0, 0, .45); }
 @keyframes slide-up { from { transform: translateY(40px); opacity: 0; } }
 @media (min-width: 640px) {
   dialog#sheet, dialog#accountSheet { margin: auto; max-width: 480px; border-radius: 22px; }
+  dialog#accountSheet { height: auto; max-height: 92dvh; padding-top: 0; }
 }
 #expenseForm { padding: 8px 20px calc(20px + env(safe-area-inset-bottom)); display: grid; gap: 4px; }
 #accountForm { padding: 8px 20px calc(20px + env(safe-area-inset-bottom)); display: grid; }
